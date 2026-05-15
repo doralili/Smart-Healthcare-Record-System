@@ -137,13 +137,11 @@ group project/
 
 ## 当前实现进度
 
-> 后续开发时在这里更新实际完成情况。
-
 | 模块 | 状态 | 负责人 | 说明 |
 |---|---|---|---|
-| 项目初始化 | 待填写 | 待填写 | 待填写 |
-| 登录与角色权限 | 待填写 | 待填写 | 待填写 |
-| openGauss 数据库连接 | 待填写 | 待填写 | 待填写 |
+| 项目初始化 | 已完成 | 成员 A | 已建立 FastAPI 后端、Vue 3 前端、基础目录结构和开发启动脚本 |
+| 登录与角色权限 | 已完成 | 成员 A | 已实现 bcrypt 密码哈希、JWT 登录、当前用户识别和基础 RBAC |
+| openGauss 数据库连接 | 已完成 | 成员 A | 已配置 openGauss Docker 容器、`users` 表和演示账号 |
 | Synthea 数据导入 | 待填写 | 待填写 | 待填写 |
 | 病历加密存储 | 待填写 | 待填写 | 待填写 |
 | 医生“我的病人列表” | 待填写 | 待填写 | 待填写 |
@@ -151,19 +149,17 @@ group project/
 | 额外授权申请 | 待填写 | 待填写 | 待填写 |
 | 审计日志 | 待填写 | 待填写 | 待填写 |
 | 哈希链完整性验证 | 待填写 | 待填写 | 待填写 |
-| 前端页面 | 待填写 | 待填写 | 待填写 |
+| 前端页面 | 部分完成 | 成员 A | 已完成登录页、四类角色 Dashboard、角色跳转和退出登录 |
 | 演示脚本与报告材料 | 待填写 | 待填写 | 待填写 |
 
 ## 待办事项
 
-> 后续按实现情况勾选。
-
-- [ ] 初始化 FastAPI 后端项目
-- [ ] 初始化 Vue 3 前端项目
-- [ ] 配置 openGauss 数据库连接
-- [ ] 建立基础数据表
-- [ ] 实现 JWT 登录认证
-- [ ] 实现角色权限控制
+- [x] 初始化 FastAPI 后端项目
+- [x] 初始化 Vue 3 前端项目
+- [x] 配置 openGauss 数据库连接
+- [x] 建立基础数据表
+- [x] 实现 JWT 登录认证
+- [x] 实现角色权限控制
 - [ ] 生成并导入 Synthea 合成数据
 - [ ] 实现病历 AES-GCM 加密入库
 - [ ] 实现医生“我的病人列表”
@@ -175,35 +171,183 @@ group project/
 
 ## 运行方式
 
-> 后续实现后补充实际命令。
+以下命令默认在项目根目录 `group project/` 下执行。
+
+### 首次环境准备
+
+后端依赖安装：
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+如果 PowerShell 禁止运行 `.ps1` 脚本，可对当前用户启用本地脚本：
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+前端依赖安装：
+
+```powershell
+cd frontend
+npm.cmd install
+```
 
 ### 后端
 
-```bash
-# TODO: 填写后端启动方式
+1. 启动 openGauss 容器：
+
+```powershell
+docker start my_opengauss
+```
+
+2. 进入后端目录并启动 FastAPI：
+
+```powershell
+cd backend
+.\run_dev.ps1
+```
+
+后端默认地址：
+
+```text
+http://127.0.0.1:8000
 ```
 
 ### 前端
 
-```bash
-# TODO: 填写前端启动方式
+进入前端目录并启动 Vite：
+
+```powershell
+cd frontend
+.\run_dev.ps1
 ```
+
+前端默认地址：
+
+```text
+http://localhost:5173
+```
+
+前端启动脚本会在当前 PowerShell 窗口运行 Vite，并在 2 秒后自动打开前端页面。
 
 ### 数据库
 
-```bash
-# TODO: 填写 openGauss 启动、初始化和连接方式
+当前开发环境使用 Docker 中的 openGauss 容器：
+
+```powershell
+docker start my_opengauss
+docker exec -it my_opengauss bash
 ```
+
+进入容器后切换到 openGauss 用户：
+
+```bash
+su - omm
+gsql -d health_security
+```
+
+查看演示账号：
+
+```sql
+SELECT id, username, role, status FROM users;
+```
+
+### 环境配置
+
+后端需要在 `backend/.env` 中配置数据库连接和 JWT 密钥。示例见 `backend/.env.example`。
+
+```env
+DATABASE_URL=postgresql+psycopg2://lxt:your_password@localhost:5432/health_security
+JWT_SECRET=dev_secret_for_course_project
+JWT_ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=60
+```
+
+注意：`.env` 不应提交到 Git；每台电脑需要按自己的数据库用户名和密码配置。
+
+### Synthea 合成数据
+
+Synthea 位于项目内的 `synthea/` 目录，用于生成合成患者和病历数据，避免使用真实医疗隐私数据。
+
+Synthea 需要 Java JDK 17 或更新版本。Windows 下可先检查：
+
+```powershell
+java -version
+```
+
+生成少量演示数据：
+
+```powershell
+cd synthea
+.\run_synthea.bat -p 10 --exporter.fhir.export=true --exporter.csv.export=true
+```
+
+常用参数说明：
+
+```text
+-p 10                         生成 10 个合成患者
+--exporter.fhir.export=true   输出 FHIR JSON 数据
+--exporter.csv.export=true    输出 CSV 数据
+```
+
+生成结果默认位于：
+
+```text
+synthea/output/fhir/
+synthea/output/csv/
+```
+
+成员 B 后续导入时，建议优先读取以下资源：
+
+```text
+Patient
+Encounter
+Condition
+Observation
+MedicationRequest
+Procedure
+```
+
+导入目标是将 Synthea 原始数据转换为系统内部的结构化病历 JSON，再加密写入 `medical_records` 表。当前仓库尚未实现 Synthea 导入脚本和病历加密入库逻辑。
+
+## 演示账号
+
+所有演示账号的密码均为：
+
+```text
+password123
+```
+
+| 用户名 | 角色 | 登录后页面 |
+|---|---|---|
+| `patient1` | 患者 `PATIENT` | `/patient` |
+| `doctor1` | 医生 `DOCTOR` | `/doctor` |
+| `admin` | 管理员 `ADMIN` | `/admin` |
+| `auditor` | 审计员 `AUDITOR` | `/auditor` |
+
+密码以 bcrypt 哈希形式保存在 `users.password_hash` 字段中，数据库中不保存明文密码。
 
 ## 接口文档
 
-> 后续后端启动后补充 Swagger 地址。
+后端启动后可访问 FastAPI 自动生成的 Swagger 文档：
 
 ```text
-TODO: http://localhost:<port>/docs
+http://127.0.0.1:8000/docs
 ```
+
+## 成员接手说明
+
+- 成员 B：继续实现 `patients`、`medical_records` 表，Synthea 数据解析脚本，AES-GCM 加密入库和解密服务。
+- 成员 C：继续实现 `doctors`、`consents` 表，医生病人列表、默认授权、额外授权申请、患者审批/拒绝/撤销和字段脱敏。
+- 成员 D：继续实现 `audit_logs` 表，访问日志、拒绝日志、SHA-256 哈希链和完整性验证页面。
+- 所有后端受保护接口都应复用 `get_current_user()` 或 `require_roles()`，不要在各模块重复实现登录认证。
 
 ## 参考文档
 
 - [项目设计文档](docs/PROJECT_DESIGN.md)
 - [中文计划书](docs/GROUP_PROJECT_PLAN_CN.md)
+- [接口边界文档](docs/API_BOUNDARY.md)
