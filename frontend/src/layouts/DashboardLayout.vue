@@ -10,6 +10,13 @@ defineProps<{
 const router = useRouter();
 const auth = useAuthStore();
 
+const roleLabels: Record<string, string> = {
+  PATIENT: "Patient",
+  DOCTOR: "Doctor",
+  ADMIN: "Admin",
+  AUDITOR: "Auditor",
+};
+
 function logout() {
   auth.logout();
   router.push("/login");
@@ -21,7 +28,7 @@ function logout() {
     <header class="dashboard-header">
       <div>
         <h1>{{ title }}</h1>
-        <p>{{ auth.user?.username }} ? {{ auth.user?.role }}</p>
+        <p>{{ auth.user?.username }} · {{ roleLabels[auth.user?.role || ""] || auth.user?.role }}</p>
       </div>
 
       <el-button type="danger" plain @click="logout">Logout</el-button>

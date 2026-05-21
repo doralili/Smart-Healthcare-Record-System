@@ -12,11 +12,15 @@ const auth = useAuthStore();
 const loading = ref(false);
 
 const form = reactive({
-  username: "doctor1",
+  username: "",
   password: "password123",
 });
 
 async function submitLogin() {
+  if (loading.value) {
+    return;
+  }
+
   loading.value = true;
 
   try {
@@ -43,7 +47,7 @@ async function submitLogin() {
       <h1>Smart Healthcare Security</h1>
       <p>Sign in with a demo account.</p>
 
-      <el-form label-position="top" @submit.prevent="submitLogin">
+      <el-form label-position="top" @submit.prevent="submitLogin" @keyup.enter="submitLogin">
         <el-form-item label="Username">
           <el-input v-model="form.username" autocomplete="username" />
         </el-form-item>
@@ -53,11 +57,13 @@ async function submitLogin() {
             v-model="form.password"
             type="password"
             autocomplete="current-password"
+            @keyup.enter="submitLogin"
             show-password
           />
         </el-form-item>
 
         <el-button
+          native-type="submit"
           type="primary"
           :loading="loading"
           class="login-button"
@@ -66,13 +72,6 @@ async function submitLogin() {
           Login
         </el-button>
       </el-form>
-
-      <div class="demo-users">
-        <span>patient1</span>
-        <span>doctor1</span>
-        <span>admin</span>
-        <span>auditor</span>
-      </div>
     </section>
   </main>
 </template>
@@ -109,13 +108,4 @@ p {
   width: 100%;
 }
 
-.demo-users {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-  margin-top: 18px;
-  color: #607086;
-  font-size: 13px;
-  text-align: center;
-}
 </style>

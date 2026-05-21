@@ -1,0 +1,51 @@
+import { api } from "./auth";
+
+export interface PatientRecordSummary {
+  id: number;
+  patient_id: number;
+  source: string;
+  record_type: string;
+  created_at: string;
+}
+
+export interface MedicalRecordPayload {
+  encounters: unknown[];
+  conditions: unknown[];
+  observations: unknown[];
+  medications: unknown[];
+  procedures: unknown[];
+}
+
+export interface PatientProfile {
+  id: number;
+  synthea_patient_id: string;
+  full_name: string;
+  gender: string | null;
+  birth_date: string | null;
+  phone: string | null;
+  address: string | null;
+  created_at: string;
+}
+
+export interface PatientRecordDetail extends PatientRecordSummary {
+  patient: PatientProfile;
+  record: MedicalRecordPayload;
+}
+
+function authHeaders(token: string) {
+  return {
+    Authorization: `Bearer ${token}`,
+  };
+}
+
+export function listMyRecords(token: string) {
+  return api.get<PatientRecordSummary[]>("/api/patient/me/records", {
+    headers: authHeaders(token),
+  });
+}
+
+export function getMyRecordDetail(token: string, recordId: number) {
+  return api.get<PatientRecordDetail>(`/api/patient/me/records/${recordId}`, {
+    headers: authHeaders(token),
+  });
+}
