@@ -1,4 +1,4 @@
-﻿# Smart Healthcare Record System
+# Smart Healthcare Record System
 
 智慧医疗病历安全系统，面向《Computer and Data Security》group project。项目目标不是实现完整医院信息系统，而是通过一个可运行 Demo 展示电子病历场景中的数据安全机制：默认临床授权、患者可撤回授权、医生按权限访问、病历加密存储、敏感字段脱敏、访问行为审计，以及审计日志防篡改验证。
 
@@ -64,8 +64,8 @@
 | 前端 | Vue 3 + Vite + Element Plus |
 | 后端 | FastAPI |
 | 数据库 | openGauss |
-| ORM | SQLAlchemy 2.x 或 SQLModel |
-| 数据库驱动 | `psycopg2` / `psycopg` 等 PostgreSQL 兼容驱动 |
+| ORM | SQLAlchemy 2.x |
+| 数据库驱动 | `psycopg2` / PostgreSQL 兼容驱动 |
 | 登录认证 | JWT |
 | 密码存储 | bcrypt |
 | 病历加密 | Python `cryptography` 库的 AES-256-GCM |
@@ -106,10 +106,10 @@ flowchart LR
 |---|---|
 | `users` | 登录账号、密码哈希、角色、状态 |
 | `patients` | 患者基本信息，与用户账号关联 |
-| `doctors` | 医生信息、科室、执照号、审核状态 |
-| `medical_records` | 加密后的病历数据、IV、认证标签、加密数据密钥 |
-| `consents` | 默认临床授权、额外访问申请与患者撤销记录 |
-| `audit_logs` | 安全审计日志和哈希链字段 |
+| `medical_records` | 加密后的病历数据、nonce、来源、记录类型 |
+| `doctors` | 医生信息、科室、执照号、审核状态，待实现 |
+| `consents` | 默认临床授权、额外访问申请与患者撤销记录，待实现 |
+| `audit_logs` | 安全审计日志和哈希链字段，待实现 |
 
 ## 最小演示目标
 
@@ -122,128 +122,240 @@ flowchart LR
 - 审计员可以验证日志哈希链完整性
 - 手动篡改旧日志后，系统能检测出异常
 
-## 项目结构
+## 目前已完成的工作
 
-```text
-group project/
-├── backend/        # 后端 FastAPI 服务代码
-├── frontend/       # 前端 Vue 3 页面代码
-├── docs/           # 项目设计、计划书等文档
-├── scripts/        # 数据导入、初始化等辅助脚本
-├── database/       # 数据库设计与初始化文件
-├── synthea/        # Synthea 合成医疗数据生成器
-└── README.md       # 项目首页说明
-```
+### 后端
+
+- 建立 FastAPI 后端项目结构。
+- 实现登录接口、当前用户识别、角色依赖 `require_roles()`。
+- 密码使用 `bcrypt` 哈希，登录成功后签发 JWT。
+- 后端从 `backend/.env` 读取数据库、JWT、病历加密密钥等配置。
+- 增加 `MEDICAL_RECORD_KEY` 配置，用于 AES-GCM 病历加密。
+- 增加北京时间工具 `backend/app/core/timezone.py`。
+- 增加 `patients`、`medical_records` SQLAlchemy 模型。
+- 增加患者本人病历接口：
+  - `GET /api/patient/me/records`
+  - `GET /api/patient/me/records/{record_id}`
+- 患者接口会校验当前用户必须是 `PATIENT`，并且只能访问绑定到自己账号的病历。
+- 增加 `backend/app/services/crypto_service.py`，用于加密和解密结构化病历 JSON。
+- 增加 `backend/scripts/import_synthea_records.py`：
+  - 读取 `synthea/output/fhir/*.json`
+  - 解析 `Patient`、`Encounter`、`Condition`、`Observation`、`MedicationRequest`、`Procedure`
+  - 跳过已死亡患者
+  - 跳过已存在患者
+  - 将导入患者绑定到患者演示账号
+  - 将结构化病历加密写入 `medical_records`
+
+### 数据库
+
+- `users.created_at`、`users.last_login_at` 改为 `TIMESTAMPTZ`。
+- 新增 `patients` 表，保存合成患者基础信息。
+- 新增 `medical_records` 表，保存加密病历、nonce、数据来源和记录类型。
+- 保留演示账号种子 SQL：`database/seed_users.sql`。
+- 新增一键数据库脚本：`database/setup_opengauss_copy.ps1`。
+
+### 前端
+
+- 实现登录页、JWT 保存、角色路由跳转和退出登录。
+- 登录页支持回车提交，避免重复提交。
+- Dashboard 顶部显示用户名和角色标签。
+- 新增患者病历 API 封装 `frontend/src/api/patientRecords.ts`。
+- 患者端 Dashboard 已从占位页升级为可用病历页面：
+  - 加载患者本人加密病历并展示解密后的内容
+  - 展示患者基本信息
+  - 展示 visits、diagnoses、lab/vital results、medications、procedures 统计
+  - 诊断列表支持按日期搜索
+  - 诊断详情抽屉展示相关就诊、用药、检查和操作
+  - 未能关联到诊断的临床记录按年/月/日分组展示
 
 ## 当前实现进度
 
-| 模块 | 状态 | 负责人 | 说明 |
-|---|---|---|---|
-| 项目初始化 | 已完成 | 成员 A | 已建立 FastAPI 后端、Vue 3 前端、基础目录结构和开发启动脚本 |
-| 登录与角色权限 | 已完成 | 成员 A | 已实现 bcrypt 密码哈希、JWT 登录、当前用户识别和基础 RBAC |
-| openGauss 数据库连接 | 已完成 | 成员 A | 已配置 openGauss Docker 容器、`users` 表和演示账号 |
-| Synthea 数据导入 | 待填写 | 待填写 | 待填写 |
-| 病历加密存储 | 待填写 | 待填写 | 待填写 |
-| 医生“我的病人列表” | 待填写 | 待填写 | 待填写 |
-| 默认授权与撤销 | 待填写 | 待填写 | 待填写 |
-| 额外授权申请 | 待填写 | 待填写 | 待填写 |
-| 审计日志 | 待填写 | 待填写 | 待填写 |
-| 哈希链完整性验证 | 待填写 | 待填写 | 待填写 |
-| 前端页面 | 部分完成 | 成员 A | 已完成登录页、四类角色 Dashboard、角色跳转和退出登录 |
-| 演示脚本与报告材料 | 待填写 | 待填写 | 待填写 |
+| 模块 | 状态 | 说明 |
+|---|---|---|
+| 项目初始化 | 已完成 | FastAPI 后端、Vue 3 前端、基础目录结构和开发启动脚本已建立 |
+| 登录与角色权限 | 已完成 | bcrypt 密码哈希、JWT 登录、当前用户识别和基础 RBAC 已实现 |
+| openGauss 数据库连接 | 已完成 | 使用 PostgreSQL 兼容方式连接 openGauss |
+| 数据库一键准备脚本 | 已完成初版 | 可创建新容器，并复制现有数据库或初始化干净数据库 |
+| Synthea 数据导入 | 已完成初版 | 可导入 FHIR JSON，生成患者信息和结构化病历 |
+| 病历加密存储 | 已完成初版 | AES-GCM 加密病历 JSON，数据库中不保存明文病历正文 |
+| 患者本人查看病历 | 已完成初版 | 患者演示账号登录后可查看绑定到自己的病历 |
+| 医生“我的病人列表” | 未完成 | 后续实现 |
+| 默认授权与撤销 | 未完成 | 后续实现 |
+| 额外授权申请 | 未完成 | 后续实现 |
+| 字段脱敏策略 | 未完成 | 当前患者本人视图展示完整导入内容 |
+| 审计日志 | 未完成 | 后续实现 |
+| 哈希链完整性验证 | 未完成 | 后续实现 |
+| 管理员/医生/审计员页面 | 占位完成 | 登录和跳转可用，业务功能待补充 |
 
-## 待办事项
+## 项目结构
 
-- [x] 初始化 FastAPI 后端项目
-- [x] 初始化 Vue 3 前端项目
-- [x] 配置 openGauss 数据库连接
-- [x] 建立基础数据表
-- [x] 实现 JWT 登录认证
-- [x] 实现角色权限控制
-- [ ] 生成并导入 Synthea 合成数据
-- [ ] 实现病历 AES-GCM 加密入库
-- [ ] 实现医生“我的病人列表”
-- [ ] 实现默认授权、额外授权和撤销授权
-- [ ] 实现字段脱敏策略
-- [ ] 实现审计日志
-- [ ] 实现审计日志哈希链验证
-- [ ] 准备最终演示数据和演示脚本
+```text
+Smart-Healthcare-Record-System/
+├── backend/                    # FastAPI 后端
+│   ├── app/
+│   │   ├── api/                # API 路由
+│   │   ├── core/               # 配置、认证、安全工具
+│   │   ├── db/                 # SQLAlchemy session
+│   │   ├── models/             # 数据库模型
+│   │   ├── schemas/            # 请求/响应结构
+│   │   └── services/           # 加密等业务服务
+│   ├── scripts/                # Synthea 导入脚本
+│   ├── requirements.txt
+│   └── run_dev.ps1
+├── frontend/                   # Vue 3 前端
+│   ├── src/
+│   │   ├── api/                # 前端 API 封装
+│   │   ├── layouts/            # 页面布局
+│   │   ├── router/             # 路由和角色跳转
+│   │   ├── stores/             # Pinia 状态
+│   │   └── views/              # 登录页和各角色页面
+│   └── run_dev.ps1
+├── database/
+│   ├── schema.sql              # 建表 SQL
+│   ├── seed_users.sql          # 演示账号 SQL
+│   └── setup_opengauss_copy.ps1 # 一键创建/复制数据库脚本
+├── docs/                       # 项目设计、计划、接口边界文档
+├── synthea/                    # Synthea 生成器与输出数据
+└── README.md
+```
 
 ## 运行方式
 
-以下命令默认在项目根目录 `group project/` 下执行。
-
-### 首次环境准备
-
-后端依赖安装：
+以下步骤默认在 Windows PowerShell 中执行。先进入项目根目录：
 
 ```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+cd D:\VScode-files\Smart-Healthcare-Record-System
 ```
 
-如果 PowerShell 禁止运行 `.ps1` 脚本，可对当前用户启用本地脚本：
+如果你的项目路径不同，请替换成自己的路径。
+
+### 0. 检查基础工具
+
+检查 Docker：
+
+```powershell
+docker --version
+docker ps
+```
+
+如果 `docker ps` 报错，先启动 Docker Desktop。
+
+检查 Python：
+
+```powershell
+python --version
+```
+
+建议使用 Python 3.10 或更新版本。
+
+检查 Node.js 和 npm：
+
+```powershell
+node --version
+npm --version
+```
+
+建议使用 Node.js 20 或更新版本。
+
+检查 Java：
+
+```powershell
+java -version
+```
+
+Synthea 需要 Java JDK 17 或更新版本。如果没有 Java，或版本低于 17，可以使用 winget 安装：
+
+```powershell
+winget install EclipseAdoptium.Temurin.17.JDK
+```
+
+安装完成后，关闭当前 PowerShell，重新打开，再检查：
+
+```powershell
+java -version
+```
+
+如果 `winget` 不可用，可以先搜索可安装的 JDK：
+
+```powershell
+winget search JDK
+```
+
+然后安装一个 JDK 17 或更新版本。
+
+### 1. 允许本地 PowerShell 脚本运行
+
+如果运行 `.ps1` 脚本时报执行策略错误，执行：
 
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 ```
 
-前端依赖安装：
-
-```powershell
-cd frontend
-npm.cmd install
-```
-
-### 后端
-
-1. 启动 openGauss 容器：
-
-```powershell
-docker start my_opengauss
-```
-
-2. 进入后端目录并启动 FastAPI：
-
-```powershell
-cd backend
-.\run_dev.ps1
-```
-
-后端默认地址：
+如果系统询问是否确认，输入：
 
 ```text
-http://127.0.0.1:8000
+Y
 ```
 
-### 前端
+### 2. 一键准备 openGauss 数据库容器
 
-进入前端目录并启动 Vite：
-
-```powershell
-cd frontend
-.\run_dev.ps1
-```
-
-前端默认地址：
+项目提供脚本：
 
 ```text
-http://localhost:5173
+database/setup_opengauss_copy.ps1
 ```
 
-前端启动脚本会在当前 PowerShell 窗口运行 Vite，并在 2 秒后自动打开前端页面。
+脚本会创建或启动目标 openGauss 容器，等待数据库就绪，创建 `health_security` 数据库，并从 SQL dump 文件恢复表结构和表数据。
 
-### 数据库
+#### 使用数据库 dump 文件恢复
 
-当前开发环境使用 Docker 中的 openGauss 容器：
+把dump文件放到：
+
+```text
+database/health_security.copy.sql
+```
+
+然后在项目根目录执行：
 
 ```powershell
-docker start my_opengauss
-docker exec -it my_opengauss bash
+.\database\setup_opengauss_copy.ps1 -DumpFilePath .\database\health_security.copy.sql
 ```
 
-进入容器后切换到 openGauss 用户：
+这会创建新的 openGauss 容器，并把 dump 文件里的表结构和数据恢复进去，包括 `users`、`patients`、`medical_records` 等表。
+
+#### 如果只是想创建干净数据库
+
+```powershell
+.\database\setup_opengauss_copy.ps1 -NoSourceCopy
+```
+
+这种方式只会执行 `database/schema.sql` 和 `database/seed_users.sql`，不会包含原数据库中的患者和病历数据。
+
+如果 `5433` 端口被占用，换一个端口，例如：
+
+```powershell
+.\database\setup_opengauss_copy.ps1 -HostPort 15432
+```
+
+如果已经运行过一次脚本，又想再创建一份新的数据库副本，请换一个新的容器名和端口：
+
+```powershell
+.\database\setup_opengauss_copy.ps1 -TargetContainer healthcare-opengauss-copy2 -HostPort 5434
+```
+
+检查容器：
+
+```powershell
+docker ps
+```
+
+进入默认目标容器：
+
+```powershell
+docker exec -it healthcare-opengauss-dev bash
+```
+
+在容器中连接数据库：
 
 ```bash
 su - omm
@@ -256,63 +368,234 @@ gsql -d health_security
 SELECT id, username, role, status FROM users;
 ```
 
-### 环境配置
+退出：
 
-后端需要在 `backend/.env` 中配置数据库连接和 JWT 密钥。示例见 `backend/.env.example`。
+```sql
+\q
+```
+
+```bash
+exit
+exit
+```
+
+### 3. 配置后端 `.env`
+
+复制示例配置：
+
+```powershell
+Copy-Item .\backend\.env.example .\backend\.env
+```
+
+如果使用的是别人提供的数据库 dump 文件，请直接使用提供者给你的 `MEDICAL_RECORD_KEY`，不要重新生成。因为 dump 里的病历密文必须用同一把密钥才能解密。
+
+如果是自己初始化干净数据库并重新导入 Synthea 数据，可以生成新的病历加密密钥：
+
+```powershell
+$bytes = New-Object byte[] 32
+[Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+[Convert]::ToBase64String($bytes)
+```
+
+复制输出的 base64 字符串，或者复制数据库提供者发给你的 `MEDICAL_RECORD_KEY`，打开配置文件：
+
+```powershell
+notepad .\backend\.env
+```
+
+如果使用数据库脚本默认参数，把 `.env` 改成：
 
 ```env
-DATABASE_URL=postgresql+psycopg2://lxt:your_password@localhost:5432/health_security
+DATABASE_URL=postgresql+psycopg2://omm:OpenGauss%40123@localhost:5433/health_security
 JWT_SECRET=dev_secret_for_course_project
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=60
+MEDICAL_RECORD_KEY=把base64密钥粘贴到这里
+TZ=Asia/Shanghai
 ```
 
-注意：`.env` 不应提交到 Git；每台电脑需要按自己的数据库用户名和密码配置。
+注意：数据库密码里的 `@` 在 URL 中要写成 `%40`，所以 `OpenGauss@123` 在 `DATABASE_URL` 里写成 `OpenGauss%40123`。
 
-### Synthea 合成数据
+注意：`MEDICAL_RECORD_KEY` 必须是 base64 编码后的 32 字节密钥。如果数据库里已经有加密病历，换密钥后旧病历将无法解密。
 
-Synthea 位于项目内的 `synthea/` 目录，用于生成合成患者和病历数据，避免使用真实医疗隐私数据。
+如果同学使用你导出的 dump 文件，里面的 `medical_records.encrypted_data` 也会被复制过去。要让后端正常解密这些病历，同学的 `backend/.env` 必须使用你导入病历时相同的 `MEDICAL_RECORD_KEY`。
 
-Synthea 需要 Java JDK 17 或更新版本。Windows 下可先检查：
+如果你用了其他端口，例如 `15432`，则改成：
+
+```env
+DATABASE_URL=postgresql+psycopg2://omm:OpenGauss%40123@localhost:15432/health_security
+```
+
+### 4. 安装后端依赖
 
 ```powershell
-java -version
+cd backend
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+cd ..
 ```
 
-生成少量演示数据：
+### 5. 安装前端依赖
 
 ```powershell
-cd synthea
-.\run_synthea.bat -p 10 --exporter.fhir.export=true --exporter.csv.export=true
+cd frontend
+npm.cmd install
+cd ..
 ```
 
-常用参数说明：
+### 6. 生成或使用 Synthea 合成数据
 
-```text
--p 10                         生成 10 个合成患者
---exporter.fhir.export=true   输出 FHIR JSON 数据
---exporter.csv.export=true    输出 CSV 数据
-```
-
-生成结果默认位于：
+仓库中已经包含少量示例数据：
 
 ```text
 synthea/output/fhir/
 synthea/output/csv/
 ```
 
-成员 B 后续导入时，建议优先读取以下资源：
+如果只是想快速跑通 Demo，可以跳过本步骤，直接导入合成病历。
 
-```text
-Patient
-Encounter
-Condition
-Observation
-MedicationRequest
-Procedure
+如果需要重新生成数据，先确认 Java：
+
+```powershell
+java -version
 ```
 
-导入目标是将 Synthea 原始数据转换为系统内部的结构化病历 JSON，再加密写入 `medical_records` 表。当前仓库尚未实现 Synthea 导入脚本和病历加密入库逻辑。
+然后执行：
+
+```powershell
+cd synthea
+java -jar .\synthea-with-dependencies.jar -p 10 --exporter.fhir.export=true --exporter.csv.export=true
+cd ..
+```
+
+参数说明：
+
+```text
+-p 10                         生成 10 个合成患者
+--exporter.fhir.export=true   输出 FHIR JSON
+--exporter.csv.export=true    输出 CSV
+```
+
+生成结果位置：
+
+```text
+synthea/output/fhir/
+synthea/output/csv/
+```
+
+### 7. 导入合成病历
+
+如果你已经从数据库 dump 文件恢复了完整数据库，通常可以跳过本步骤，因为 dump 里已经包含患者和加密病历数据。
+
+如果你是用 `-NoSourceCopy` 初始化的干净数据库，或者需要重新导入 Synthea 数据，确认 Docker 容器正在运行、`backend/.env` 已配置、`MEDICAL_RECORD_KEY` 已填写、后端依赖已安装后，执行：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe .\scripts\import_synthea_records.py
+cd ..
+```
+
+导入脚本会把导入的患者绑定到患者演示账号。这样使用 `patient1` 到 `patient10` 中已绑定病历的账号登录后，就能看到自己的病历。重复执行时，已导入过的 Synthea 患者会被跳过。
+
+检查数据库中是否有患者和病历：
+
+```powershell
+docker exec -it healthcare-opengauss-dev bash
+```
+
+容器中执行：
+
+```bash
+su - omm
+gsql -d health_security
+```
+
+查询：
+
+```sql
+SELECT id, user_id, full_name, synthea_patient_id FROM patients;
+SELECT id, patient_id, source, record_type, created_at FROM medical_records;
+```
+
+验证病历是密文：
+
+```sql
+SELECT id, left(encrypted_data, 80) AS encrypted_preview, nonce FROM medical_records;
+```
+
+退出：
+
+```sql
+\q
+```
+
+```bash
+exit
+exit
+```
+
+### 8. 启动后端
+
+新开一个 PowerShell 窗口：
+
+```powershell
+cd D:\VScode-files\Smart-Healthcare-Record-System
+cd backend
+.\run_dev.ps1
+```
+
+后端默认地址：
+
+```text
+http://127.0.0.1:8000
+```
+
+健康检查：
+
+```powershell
+Invoke-WebRequest -Uri http://127.0.0.1:8000/health
+```
+
+Swagger / OpenAPI 文档：
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+### 9. 启动前端
+
+再新开一个 PowerShell 窗口：
+
+```powershell
+cd D:\VScode-files\Smart-Healthcare-Record-System
+cd frontend
+.\run_dev.ps1
+```
+
+前端默认地址：
+
+```text
+http://localhost:5173
+```
+
+前端启动脚本会在当前 PowerShell 窗口运行 Vite，并在 2 秒后自动打开页面。
+
+### 10. 登录演示
+
+打开：
+
+```text
+http://localhost:5173
+```
+
+患者账号示例：
+
+```text
+用户名：patient1
+密码：password123
+```
+
+`patient1` 到 `patient10` 都是患者演示账号，密码相同。登录后进入 `/patient`，可以查看患者基础信息、诊断列表、相关就诊记录、检查和生命体征、用药、操作记录，以及未关联到诊断的临床记录分组。
 
 ## 演示账号
 
@@ -322,26 +605,35 @@ Procedure
 password123
 ```
 
-| 用户名 | 角色 | 登录后页面 |
-|---|---|---|
-| `patient1` | 患者 `PATIENT` | `/patient` |
-| `doctor1` | 医生 `DOCTOR` | `/doctor` |
-| `admin` | 管理员 `ADMIN` | `/admin` |
-| `auditor` | 审计员 `AUDITOR` | `/auditor` |
+| 用户名 | 角色 | 登录后页面 | 当前可演示内容 |
+|---|---|---|---|
+| `patient1` - `patient10` | `PATIENT` | `/patient` | 查看绑定到自己的加密病历 |
+| `doctor1` | `DOCTOR` | `/doctor` | 登录和页面跳转，占位页 |
+| `admin` | `ADMIN` | `/admin` | 登录和页面跳转，占位页 |
+| `auditor` | `AUDITOR` | `/auditor` | 登录和页面跳转，占位页 |
 
-密码以 bcrypt 哈希形式保存在 `users.password_hash` 字段中，数据库中不保存明文密码。
+## 当前可演示流程
 
-## 接口文档
+1. 执行 `database/setup_opengauss_copy.ps1` 准备数据库容器。
+2. 配置 `backend/.env`，填写数据库连接和 `MEDICAL_RECORD_KEY`。
+3. 安装后端依赖和前端依赖。
+4. 如有需要，使用 Synthea 生成合成数据。
+5. 如果使用的是干净数据库，执行 `backend/scripts/import_synthea_records.py` 导入合成病历；如果已经从 dump 恢复完整数据库，可以跳过导入。
+6. 启动后端和前端。
+7. 使用 `patient1` 到 `patient10` 中任意已绑定病历的患者账号登录，密码为 `password123`。
+8. 进入患者 Dashboard，查看患者基础信息、诊断列表、相关就诊、检查、用药、操作记录。
+9. 查询 `medical_records.encrypted_data`，验证病历正文以密文保存。
 
-后端启动后可访问 FastAPI 自动生成的 Swagger 文档：
+## 后续待办
 
-```text
-http://127.0.0.1:8000/docs
-```
+- 实现医生“我的病人列表”。
+- 实现默认临床授权、额外授权申请、患者审批/拒绝、撤销授权。
+- 实现医生视角的病历字段脱敏策略。
+- 实现审计日志，记录登录、查看病历、拒绝访问、授权变更等行为。
+- 实现审计日志 SHA-256 哈希链和完整性验证接口。
+- 补齐管理员、医生、审计员页面的业务功能。
+- 准备最终演示脚本和报告截图。
 
-## 成员接手说明
-
-- 成员 B：继续实现 `patients`、`medical_records` 表，Synthea 数据解析脚本，AES-GCM 加密入库和解密服务。
 - 成员 C：继续实现 `doctors`、`consents` 表，医生病人列表、默认授权、额外授权申请、患者审批/拒绝/撤销和字段脱敏。
 - 成员 D：继续实现 `audit_logs` 表，访问日志、拒绝日志、SHA-256 哈希链和完整性验证页面。
 - 所有后端受保护接口都应复用 `get_current_user()` 或 `require_roles()`，不要在各模块重复实现登录认证。
