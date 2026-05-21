@@ -1,6 +1,5 @@
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user
@@ -29,7 +28,14 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
             detail="User account is not active",
         )
 
-    user.last_login_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.execute(
+        text(
+            "UPDATE users "
+            "SET last_login_at = CURRENT_TIMESTAMP "
+            "WHERE id = :user_id"
+        ),
+        {"user_id": user.id},
+    )
     db.commit()
 
     access_token = create_access_token(subject=str(user.id), role=user.role)
