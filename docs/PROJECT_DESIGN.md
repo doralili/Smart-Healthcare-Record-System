@@ -681,10 +681,13 @@ This makes the presentation stable and easy to rehearse.
 ## 10.1 Authentication
 
 ```text
+POST /api/auth/register
 POST /api/auth/login
 POST /api/auth/logout
 GET  /api/auth/me
 ```
+
+Public registration is limited to patient accounts. New registered users are created as `PATIENT` with `ACTIVE` status. Doctor, admin, and auditor accounts are issued through administrator-controlled setup or seed data rather than public self-registration.
 
 ## 10.2 Patient APIs
 

@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { login, type UserInfo } from "../api/auth";
+import { login, register, type UserInfo } from "../api/auth";
 
 interface AuthState {
   token: string;
@@ -28,6 +28,11 @@ export const useAuthStore = defineStore("auth", {
       localStorage.setItem("user", JSON.stringify(this.user));
 
       return res.data.user;
+    },
+
+    async registerPatient(username: string, password: string) {
+      const res = await register({ username, password });
+      return res.data;
     },
 
     logout() {

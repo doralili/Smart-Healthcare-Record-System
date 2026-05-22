@@ -9,6 +9,11 @@ export interface LoginRequest {
   password: string;
 }
 
+export interface RegisterRequest {
+  username: string;
+  password: string;
+}
+
 export interface UserInfo {
   id: number;
   username: string;
@@ -24,6 +29,10 @@ export interface LoginResponse {
 
 export function login(data: LoginRequest) {
   return api.post<LoginResponse>("/api/auth/login", data);
+}
+
+export function register(data: RegisterRequest) {
+  return api.post<UserInfo>("/api/auth/register", data);
 }
 
 export function getMe(token: string) {

@@ -10,6 +10,7 @@ const router = useRouter();
 const auth = useAuthStore();
 
 const loading = ref(false);
+const mode = ref<"login" | "register">("login");
 
 const form = reactive({
   username: "",
@@ -39,15 +40,55 @@ async function submitLogin() {
     loading.value = false;
   }
 }
+
+async function submitRegister() {
+  if (loading.value) {
+    return;
+  }
+
+  loading.value = true;
+
+  try {
+    const user = await auth.registerPatient(form.username, form.password);
+    ElMessage.success(`Patient account created: ${user.username}`);
+    mode.value = "login";
+  } catch (error: any) {
+    if (!error.response) {
+      ElMessage.error("Cannot connect to backend server");
+    } else if (error.response.status === 409) {
+      ElMessage.error("Username already exists");
+    } else if (error.response.status === 400) {
+      ElMessage.error(error.response.data?.detail || "Invalid registration information");
+    } else {
+      ElMessage.error("Registration failed");
+    }
+  } finally {
+    loading.value = false;
+  }
+}
+
+function submitForm() {
+  if (mode.value === "register") {
+    submitRegister();
+    return;
+  }
+
+  submitLogin();
+}
 </script>
 
 <template>
   <main class="login-page">
     <section class="login-panel">
       <h1>Smart Healthcare Security</h1>
-      <p>Sign in with a demo account.</p>
+      <p>{{ mode === "login" ? "Sign in with a demo account." : "Create a patient account." }}</p>
 
-      <el-form label-position="top" @submit.prevent="submitLogin" @keyup.enter="submitLogin">
+      <el-radio-group v-model="mode" class="mode-switch">
+        <el-radio-button label="login">Login</el-radio-button>
+        <el-radio-button label="register">Patient Sign Up</el-radio-button>
+      </el-radio-group>
+
+      <el-form label-position="top" @submit.prevent="submitForm" @keyup.enter="submitForm">
         <el-form-item label="Username">
           <el-input v-model="form.username" autocomplete="username" />
         </el-form-item>
@@ -56,8 +97,8 @@ async function submitLogin() {
           <el-input
             v-model="form.password"
             type="password"
-            autocomplete="current-password"
-            @keyup.enter="submitLogin"
+            :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
+            @keyup.enter="submitForm"
             show-password
           />
         </el-form-item>
@@ -67,9 +108,9 @@ async function submitLogin() {
           type="primary"
           :loading="loading"
           class="login-button"
-          @click="submitLogin"
+          @click="submitForm"
         >
-          Login
+          {{ mode === "login" ? "Login" : "Create Patient Account" }}
         </el-button>
       </el-form>
     </section>
@@ -102,6 +143,19 @@ h1 {
 p {
   margin: 0 0 24px;
   color: #607086;
+}
+
+.mode-switch {
+  width: 100%;
+  margin-bottom: 20px;
+}
+
+.mode-switch :deep(.el-radio-button) {
+  width: 50%;
+}
+
+.mode-switch :deep(.el-radio-button__inner) {
+  width: 100%;
 }
 
 .login-button {

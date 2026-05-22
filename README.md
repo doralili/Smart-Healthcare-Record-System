@@ -127,7 +127,8 @@ flowchart LR
 ### 后端
 
 - 建立 FastAPI 后端项目结构。
-- 实现登录接口、当前用户识别、角色依赖 `require_roles()`。
+- 实现登录接口、患者注册接口、当前用户识别、角色依赖 `require_roles()`。
+- 患者可以自助注册；医生、管理员、审计员账号不开放自助注册，应由管理员或种子数据统一发放。
 - 密码使用 `bcrypt` 哈希，登录成功后签发 JWT。
 - 后端从 `backend/.env` 读取数据库、JWT、病历加密密钥等配置。
 - 增加 `MEDICAL_RECORD_KEY` 配置，用于 AES-GCM 病历加密。
@@ -153,10 +154,14 @@ flowchart LR
 - 新增 `medical_records` 表，保存加密病历、nonce、数据来源和记录类型。
 - 保留演示账号种子 SQL：`database/seed_users.sql`。
 - 新增一键数据库脚本：`database/setup_opengauss_copy.ps1`。
+- 当前本地新版开发库使用独立容器 `healthcare-opengauss-dev`，映射到本机 `5433`，数据库名为 `health_security`。
+- 当前新版开发库已导入 100 个患者和 100 条加密病历，`patient1` 到 `patient10` 已绑定到前 10 个患者账号。
+- 旧容器 `my_opengauss` 保留给其他项目使用，其中的 `music` 数据库不要删除或修改。
 
 ### 前端
 
 - 实现登录页、JWT 保存、角色路由跳转和退出登录。
+- 登录页新增 `Login / Patient Sign Up` 切换；注册入口只创建 `PATIENT` 用户。
 - 登录页支持回车提交，避免重复提交。
 - Dashboard 顶部显示用户名和角色标签。
 - 新增患者病历 API 封装 `frontend/src/api/patientRecords.ts`。
@@ -173,7 +178,7 @@ flowchart LR
 | 模块 | 状态 | 说明 |
 |---|---|---|
 | 项目初始化 | 已完成 | FastAPI 后端、Vue 3 前端、基础目录结构和开发启动脚本已建立 |
-| 登录与角色权限 | 已完成 | bcrypt 密码哈希、JWT 登录、当前用户识别和基础 RBAC 已实现 |
+| 登录、患者注册与角色权限 | 已完成 | bcrypt 密码哈希、JWT 登录、患者自助注册、当前用户识别和基础 RBAC 已实现；医生等高权限账号统一发放 |
 | openGauss 数据库连接 | 已完成 | 使用 PostgreSQL 兼容方式连接 openGauss |
 | 数据库一键准备脚本 | 已完成初版 | 可创建新容器，并复制现有数据库或初始化干净数据库 |
 | Synthea 数据导入 | 已完成初版 | 可导入 FHIR JSON，生成患者信息和结构化病历 |
@@ -307,6 +312,14 @@ database/setup_opengauss_copy.ps1
 
 脚本会创建或启动目标 openGauss 容器，等待数据库就绪，创建 `health_security` 数据库，并从 SQL dump 文件恢复表结构和表数据。
 
+当前本地开发环境建议使用独立容器：
+
+```text
+healthcare-opengauss-dev  ->  localhost:5433/health_security
+```
+
+旧容器 `my_opengauss` 中还保留其他项目的 `music` 数据库，不要把它当作本项目新版主库，也不要删除该容器。
+
 #### 使用数据库 dump 文件恢复
 
 把dump文件放到：
@@ -393,7 +406,9 @@ Copy-Item .\backend\.env.example .\backend\.env
 
 ```powershell
 $bytes = New-Object byte[] 32
-[Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+$rng.GetBytes($bytes)
+$rng.Dispose()
 [Convert]::ToBase64String($bytes)
 ```
 
@@ -497,6 +512,14 @@ cd ..
 
 导入脚本会把导入的患者绑定到患者演示账号。这样使用 `patient1` 到 `patient10` 中已绑定病历的账号登录后，就能看到自己的病历。重复执行时，已导入过的 Synthea 患者会被跳过。
 
+当前本地新版开发库的数据状态：
+
+```text
+users: 13
+patients: 100
+medical_records: 100
+```
+
 检查数据库中是否有患者和病历：
 
 ```powershell
@@ -596,6 +619,15 @@ http://localhost:5173
 ```
 
 `patient1` 到 `patient10` 都是患者演示账号，密码相同。登录后进入 `/patient`，可以查看患者基础信息、诊断列表、相关就诊记录、检查和生命体征、用药、操作记录，以及未关联到诊断的临床记录分组。
+
+登录页也提供 `Patient Sign Up`，用于创建新的患者账号。注册接口不会接受角色参数，新账号固定为：
+
+```text
+role=PATIENT
+status=ACTIVE
+```
+
+医生、管理员、审计员账号不允许自助注册，应通过管理员功能或种子 SQL 统一发放。
 
 ## 演示账号
 

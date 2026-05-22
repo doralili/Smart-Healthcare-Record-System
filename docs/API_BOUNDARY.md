@@ -11,10 +11,18 @@ Member A provides the base backend and frontend login framework:
 - `users` table
 - bcrypt password hashing
 - JWT login
+- patient self-registration
 - current-user dependency
 - role-based access control
 - four demo accounts
 - frontend login and role-based route redirection
+
+Registration policy:
+
+- Public registration is only for patient accounts.
+- `POST /api/auth/register` ignores role assignment from clients because the request body does not include a role field.
+- New registered users are created with `role="PATIENT"` and `status="ACTIVE"`.
+- Doctor, admin, and auditor accounts should be issued by administrators or seed data, not by public registration.
 
 ## 2. Demo Accounts
 
@@ -53,8 +61,18 @@ npm.cmd install
 Start the openGauss container first:
 
 ```powershell
-docker start my_opengauss
+docker start healthcare-opengauss-dev
 ```
+
+Current project database:
+
+```text
+Container: healthcare-opengauss-dev
+Port:      localhost:5433
+Database:  health_security
+```
+
+Do not use `my_opengauss` as the current project database. It is reserved for other local data such as the `music` database.
 
 Start the backend:
 
@@ -139,11 +157,46 @@ Current status:
 
 ```text
 Synthea generator exists.
-Synthea import script is not implemented yet.
-Encrypted medical-record storage is not implemented yet.
+Synthea import script exists.
+Encrypted medical-record storage exists.
+Current local development database has 100 patients and 100 encrypted medical records.
+patient1 through patient10 are bound to the first 10 imported patients.
 ```
 
 ## 5. Authentication APIs
+
+### Patient Registration
+
+```text
+POST /api/auth/register
+```
+
+Request body:
+
+```json
+{
+  "username": "new_patient",
+  "password": "password123"
+}
+```
+
+Successful response:
+
+```json
+{
+  "id": 14,
+  "username": "new_patient",
+  "role": "PATIENT",
+  "status": "ACTIVE"
+}
+```
+
+Error behavior:
+
+| Status | Meaning |
+|---|---|
+| `400` | Username is empty or password is invalid |
+| `409` | Username already exists |
 
 ### Login
 
