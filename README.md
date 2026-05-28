@@ -227,6 +227,9 @@ flowchart LR
 | 哈希链完整性验证 | 未完成 | 后续实现 |
 | 管理员/审计员页面 | 占位完成 | 登录和跳转可用，业务功能待补充 |
 
+其中已建立的access_logs表包含的字段有：id，doctor_id，patient_id ，consent_id，action，record_scope
+
+
 ## 项目结构
 
 ```text
