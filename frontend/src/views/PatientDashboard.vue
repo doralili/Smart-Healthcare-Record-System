@@ -11,6 +11,17 @@ import {
 import DashboardLayout from "../layouts/DashboardLayout.vue";
 import { useAuthStore } from "../stores/auth";
 
+// 新增：授权管理相关的 API 和类型
+import { 
+  getPendingConsents, 
+  approveConsent, 
+  rejectConsent,
+  getMyDoctors,
+  revokeConsent,
+  type PendingConsent,
+  type AuthorizedDoctor
+} from "../api/patientAuth";
+
 interface DiagnosisRow {
   index: number;
   diagnosis: string;
@@ -57,6 +68,12 @@ const selectedDiagnosis = ref<DiagnosisRow | null>(null);
 const diagnosisDrawerVisible = ref(false);
 const selectedUnlinkedClinicalGroup = ref<ObservationGroupRow | null>(null);
 const unlinkedClinicalDrawerVisible = ref(false);
+
+// 新增：授权管理相关状态
+const activeTab = ref('records')
+const pendingConsents = ref<PendingConsent[]>([])
+const authorizedDoctors = ref<AuthorizedDoctor[]>([])
+const loadingAuth = ref(false)
 
 const record = computed(() => selectedRecord.value?.record);
 const patient = computed(() => selectedRecord.value?.patient);
@@ -719,275 +736,439 @@ async function loadRecords() {
   }
 }
 
+// 新增：加载待审批申请
+async function loadPendingConsents() {
+  if (!auth.token) return;
+  loadingAuth.value = true;
+  try {
+    const res = await getPendingConsents(auth.token);
+    // 修复：res 已经是 response.data，直接取 pending_consents
+    pendingConsents.value = res.pending_consents || [];
+    console.log('Pending consents loaded:', pendingConsents.value);
+  } catch (err) {
+    console.error('Failed to load pending requests:', err);
+    ElMessage.error("Failed to load pending requests");
+  } finally {
+    loadingAuth.value = false;
+  }
+}
+
+// 新增：加载已授权医生
+async function loadMyDoctors() {
+  if (!auth.token) return;
+  loadingAuth.value = true;
+  try {
+    const res = await getMyDoctors(auth.token);
+    // 修复：res 已经是 response.data，直接取 doctors
+    authorizedDoctors.value = res.doctors || [];
+    console.log('Authorized doctors loaded:', authorizedDoctors.value);
+  } catch (err) {
+    console.error('Failed to load authorized doctors:', err);
+    ElMessage.error("Failed to load authorized doctors");
+  } finally {
+    loadingAuth.value = false;
+  }
+}
+
+// 新增：批准申请
+async function handleApprove(consentId: number) {
+  try {
+    await approveConsent(auth.token, consentId);
+    ElMessage.success("Access granted to doctor");
+    await loadPendingConsents();
+    await loadMyDoctors();
+  } catch (err) {
+    console.error('Failed to approve request:', err);
+    ElMessage.error("Failed to approve request");
+  }
+}
+
+// 新增：拒绝申请
+async function handleReject(consentId: number) {
+  try {
+    await rejectConsent(auth.token, consentId);
+    ElMessage.success("Request rejected");
+    await loadPendingConsents();
+  } catch (err) {
+    console.error('Failed to reject request:', err);
+    ElMessage.error("Failed to reject request");
+  }
+}
+
+// 新增：撤销授权
+async function handleRevoke(consentId: number, doctorName: string) {
+  try {
+    await revokeConsent(auth.token, consentId);
+    ElMessage.success(`Revoked access for Dr. ${doctorName}`);
+    await loadMyDoctors();
+    await loadPendingConsents();
+  } catch (err) {
+    console.error('Failed to revoke access:', err);
+    ElMessage.error("Failed to revoke access");
+  }
+}
+
+// 新增：切换 Tab 时加载数据
+async function onTabChange(tab: string) {
+  if (tab === 'auth') {
+    await Promise.all([loadPendingConsents(), loadMyDoctors()]);
+  }
+}
+
 onMounted(() => {
   loadRecords();
+  loadPendingConsents();
+  loadMyDoctors();
 });
 </script>
 
 <template>
   <DashboardLayout title="Patient Dashboard">
-    <section v-loading="loading" class="record-page">
-      <el-empty
-        v-if="!loading && !selectedRecord"
-        description="No medical record found."
-      />
+    <el-tabs v-model="activeTab" @tab-click="(tab) => onTabChange(tab.paneName)">
+      <!-- 我的病历 Tab -->
+      <el-tab-pane label="My Records" name="records">
+        <section v-loading="loading" class="record-page">
+          <el-empty
+            v-if="!loading && !selectedRecord"
+            description="No medical record found."
+          />
 
-      <template v-if="selectedRecord">
-        <section class="overview-panel">
-          <div>
-            <p class="eyebrow">Complete Medical Record</p>
-            <h2>My Health Record</h2>
-            <p class="muted">
-              This record is decrypted securely after you sign in.
-            </p>
-          </div>
+          <template v-if="selectedRecord">
+            <section class="overview-panel">
+              <div>
+                <p class="eyebrow">Complete Medical Record</p>
+                <h2>My Health Record</h2>
+                <p class="muted">
+                  This record is decrypted securely after you sign in.
+                </p>
+              </div>
 
-          <el-button :loading="loading" @click="loadRecords">
-            Refresh
-          </el-button>
-        </section>
+              <el-button :loading="loading" @click="loadRecords">
+                Refresh
+              </el-button>
+            </section>
 
-        <el-card class="info-card" shadow="never">
-          <template #header>
-            <span>Patient Information</span>
-          </template>
-
-          <el-descriptions :column="2" border>
-            <el-descriptions-item label="Name">
-              {{ patient?.full_name || "Not recorded" }}
-            </el-descriptions-item>
-            <el-descriptions-item label="Gender">
-              {{ formatStatus(patient?.gender) }}
-            </el-descriptions-item>
-            <el-descriptions-item label="Birth Date">
-              {{ formatDateOnly(patient?.birth_date) }}
-            </el-descriptions-item>
-            <el-descriptions-item label="Phone">
-              {{ patient?.phone || "Not recorded" }}
-            </el-descriptions-item>
-            <el-descriptions-item label="Address" :span="2">
-              {{ patient?.address || "Not recorded" }}
-            </el-descriptions-item>
-          </el-descriptions>
-        </el-card>
-
-        <section class="stats-grid">
-          <div
-            v-for="item in overviewItems"
-            :key="item.label"
-            class="stat-card"
-          >
-            <span>{{ item.label }}</span>
-            <strong>{{ item.value }}</strong>
-          </div>
-        </section>
-
-        <el-card class="info-card" shadow="never">
-          <template #header>
-            <span>Record Information</span>
-          </template>
-
-          <el-descriptions :column="2" border>
-            <el-descriptions-item label="Record ID">
-              {{ selectedRecord.id }}
-            </el-descriptions-item>
-            <el-descriptions-item label="Created At">
-              {{ formatDateTime(selectedRecord.created_at) }}
-            </el-descriptions-item>
-          </el-descriptions>
-        </el-card>
-
-        <el-card class="section-card" shadow="never">
-          <template #header>
-            <div class="section-header">
-              <span>Diagnoses</span>
-              <el-input
-                v-model="diagnosisDateQuery"
-                clearable
-                class="date-filter"
-                placeholder="Search by date, e.g. 2024, 2024-05, 2024-05-20"
-              />
-            </div>
-          </template>
-
-          <el-table
-            :data="filteredDiagnosisRows"
-            border
-            empty-text="No diagnoses match this time."
-          >
-            <el-table-column prop="diagnosis" label="Diagnosis" min-width="260" />
-            <el-table-column prop="status" label="Status" width="160" />
-            <el-table-column prop="date" label="Date" width="190" />
-            <el-table-column label="Details" width="120">
-              <template #default="{ row }">
-                <el-button type="primary" link @click="openDiagnosis(row)">
-                  View
-                </el-button>
+            <el-card class="info-card" shadow="never">
+              <template #header>
+                <span>Patient Information</span>
               </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
 
-        <el-card class="section-card" shadow="never">
-          <template #header>
-            <span>Unlinked Clinical Records</span>
-          </template>
-
-          <el-table
-            :data="unlinkedClinicalGroups"
-            border
-            row-key="key"
-            empty-text="All lab results, medications, and procedures are linked to a diagnosis or visit."
-          >
-            <el-table-column prop="period" label="Period" min-width="220" />
-            <el-table-column prop="level" label="Level" min-width="120" />
-            <el-table-column prop="types" label="Types" min-width="260" />
-            <el-table-column prop="count" label="Records" min-width="140" />
-            <el-table-column label="Details" min-width="180">
-              <template #default="{ row }">
-                <el-button type="primary" link @click="openUnlinkedClinicalGroup(row)">
-                  View Records
-                </el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-
-        <el-drawer
-          v-model="diagnosisDrawerVisible"
-          size="58%"
-          :title="selectedDiagnosis?.diagnosis || 'Diagnosis Details'"
-        >
-          <template v-if="selectedDiagnosis">
-            <section class="drawer-section">
-              <h3>Diagnosis Information</h3>
               <el-descriptions :column="2" border>
-                <el-descriptions-item label="Diagnosis">
-                  {{ selectedDiagnosis.diagnosis }}
+                <el-descriptions-item label="Name">
+                  {{ patient?.full_name || "Not recorded" }}
                 </el-descriptions-item>
-                <el-descriptions-item label="Status">
-                  {{ selectedDiagnosis.status }}
+                <el-descriptions-item label="Gender">
+                  {{ formatStatus(patient?.gender) }}
                 </el-descriptions-item>
-                <el-descriptions-item label="Recorded At">
-                  {{ selectedDiagnosis.date }}
+                <el-descriptions-item label="Birth Date">
+                  {{ formatDateOnly(patient?.birth_date) }}
                 </el-descriptions-item>
-                <el-descriptions-item label="Doctor">
-                  Not recorded in current imported record
+                <el-descriptions-item label="Phone">
+                  {{ patient?.phone || "Not recorded" }}
+                </el-descriptions-item>
+                <el-descriptions-item label="Address" :span="2">
+                  {{ patient?.address || "Not recorded" }}
                 </el-descriptions-item>
               </el-descriptions>
+            </el-card>
+
+            <section class="stats-grid">
+              <div
+                v-for="item in overviewItems"
+                :key="item.label"
+                class="stat-card"
+              >
+                <span>{{ item.label }}</span>
+                <strong>{{ item.value }}</strong>
+              </div>
             </section>
 
-            <section class="drawer-section">
-              <h3>Related Visits</h3>
+            <el-card class="info-card" shadow="never">
+              <template #header>
+                <span>Record Information</span>
+              </template>
+
+              <el-descriptions :column="2" border>
+                <el-descriptions-item label="Record ID">
+                  {{ selectedRecord.id }}
+                </el-descriptions-item>
+                <el-descriptions-item label="Created At">
+                  {{ formatDateTime(selectedRecord.created_at) }}
+                </el-descriptions-item>
+              </el-descriptions>
+            </el-card>
+
+            <el-card class="section-card" shadow="never">
+              <template #header>
+                <div class="section-header">
+                  <span>Diagnoses</span>
+                  <el-input
+                    v-model="diagnosisDateQuery"
+                    clearable
+                    class="date-filter"
+                    placeholder="Search by date, e.g. 2024, 2024-05, 2024-05-20"
+                  />
+                </div>
+              </template>
+
               <el-table
-                :data="relatedEncounters"
+                :data="filteredDiagnosisRows"
                 border
-                empty-text="No visit found near this diagnosis date."
+                empty-text="No diagnoses match this time."
               >
-                <el-table-column prop="name" label="Visit Type" min-width="220" />
-                <el-table-column prop="type" label="Class" width="130" />
-                <el-table-column prop="status" label="Status" width="140" />
+                <el-table-column prop="diagnosis" label="Diagnosis" min-width="260" />
+                <el-table-column prop="status" label="Status" width="160" />
                 <el-table-column prop="date" label="Date" width="190" />
+                <el-table-column label="Details" width="120">
+                  <template #default="{ row }">
+                    <el-button type="primary" link @click="openDiagnosis(row)">
+                      View
+                    </el-button>
+                  </template>
+                </el-table-column>
               </el-table>
-            </section>
+            </el-card>
 
-            <section class="drawer-section">
-              <h3>Related Medications</h3>
-              <el-table
-                :data="relatedMedications"
-                border
-                empty-text="No medication found near this diagnosis date."
-              >
-                <el-table-column prop="name" label="Medication" min-width="280" />
-                <el-table-column prop="status" label="Status" width="140" />
-                <el-table-column prop="date" label="Prescribed At" width="190" />
-              </el-table>
-            </section>
+            <el-card class="section-card" shadow="never">
+              <template #header>
+                <span>Unlinked Clinical Records</span>
+              </template>
 
-            <section class="drawer-section">
-              <h3>Related Lab / Vital Results</h3>
               <el-table
-                :data="relatedObservations"
+                :data="unlinkedClinicalGroups"
                 border
-                empty-text="No lab or vital result found near this diagnosis date."
+                row-key="key"
+                empty-text="All lab results, medications, and procedures are linked to a diagnosis or visit."
               >
-                <el-table-column prop="name" label="Item" min-width="240" />
-                <el-table-column prop="value" label="Result" min-width="180" />
-                <el-table-column prop="status" label="Status" width="140" />
-                <el-table-column prop="date" label="Date" width="190" />
+                <el-table-column prop="period" label="Period" min-width="220" />
+                <el-table-column prop="level" label="Level" min-width="120" />
+                <el-table-column prop="types" label="Types" min-width="260" />
+                <el-table-column prop="count" label="Records" min-width="140" />
+                <el-table-column label="Details" min-width="180">
+                  <template #default="{ row }">
+                    <el-button type="primary" link @click="openUnlinkedClinicalGroup(row)">
+                      View Records
+                    </el-button>
+                  </template>
+                </el-table-column>
               </el-table>
-            </section>
+            </el-card>
 
-            <section class="drawer-section">
-              <h3>Related Procedures</h3>
-              <el-table
-                :data="relatedProcedures"
-                border
-                empty-text="No procedure found near this diagnosis date."
-              >
-                <el-table-column prop="name" label="Procedure" min-width="280" />
-                <el-table-column prop="status" label="Status" width="140" />
-                <el-table-column prop="date" label="Date" width="190" />
-              </el-table>
-            </section>
+            <el-drawer
+              v-model="diagnosisDrawerVisible"
+              size="58%"
+              :title="selectedDiagnosis?.diagnosis || 'Diagnosis Details'"
+            >
+              <template v-if="selectedDiagnosis">
+                <section class="drawer-section">
+                  <h3>Diagnosis Information</h3>
+                  <el-descriptions :column="2" border>
+                    <el-descriptions-item label="Diagnosis">
+                      {{ selectedDiagnosis.diagnosis }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="Status">
+                      {{ selectedDiagnosis.status }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="Recorded At">
+                      {{ selectedDiagnosis.date }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="Doctor">
+                      Not recorded in current imported record
+                    </el-descriptions-item>
+                  </el-descriptions>
+                </section>
+
+                <section class="drawer-section">
+                  <h3>Related Visits</h3>
+                  <el-table
+                    :data="relatedEncounters"
+                    border
+                    empty-text="No visit found near this diagnosis date."
+                  >
+                    <el-table-column prop="name" label="Visit Type" min-width="220" />
+                    <el-table-column prop="type" label="Class" width="130" />
+                    <el-table-column prop="status" label="Status" width="140" />
+                    <el-table-column prop="date" label="Date" width="190" />
+                  </el-table>
+                </section>
+
+                <section class="drawer-section">
+                  <h3>Related Medications</h3>
+                  <el-table
+                    :data="relatedMedications"
+                    border
+                    empty-text="No medication found near this diagnosis date."
+                  >
+                    <el-table-column prop="name" label="Medication" min-width="280" />
+                    <el-table-column prop="status" label="Status" width="140" />
+                    <el-table-column prop="date" label="Prescribed At" width="190" />
+                  </el-table>
+                </section>
+
+                <section class="drawer-section">
+                  <h3>Related Lab / Vital Results</h3>
+                  <el-table
+                    :data="relatedObservations"
+                    border
+                    empty-text="No lab or vital result found near this diagnosis date."
+                  >
+                    <el-table-column prop="name" label="Item" min-width="240" />
+                    <el-table-column prop="value" label="Result" min-width="180" />
+                    <el-table-column prop="status" label="Status" width="140" />
+                    <el-table-column prop="date" label="Date" width="190" />
+                  </el-table>
+                </section>
+
+                <section class="drawer-section">
+                  <h3>Related Procedures</h3>
+                  <el-table
+                    :data="relatedProcedures"
+                    border
+                    empty-text="No procedure found near this diagnosis date."
+                  >
+                    <el-table-column prop="name" label="Procedure" min-width="280" />
+                    <el-table-column prop="status" label="Status" width="140" />
+                    <el-table-column prop="date" label="Date" width="190" />
+                  </el-table>
+                </section>
+              </template>
+            </el-drawer>
+
+            <el-drawer
+              v-model="unlinkedClinicalDrawerVisible"
+              size="52%"
+              :title="`Unlinked Clinical Records - ${selectedUnlinkedClinicalGroup?.period || ''}`"
+            >
+              <template v-if="selectedUnlinkedClinicalGroup">
+                <section class="drawer-section">
+                  <h3>Lab / Vital Results</h3>
+                  <el-table
+                    :data="selectedUnlinkedLabRows"
+                    border
+                    empty-text="No unlinked lab or vital results in this period."
+                  >
+                    <el-table-column prop="name" label="Item" min-width="260" />
+                    <el-table-column prop="value" label="Result" min-width="180" />
+                    <el-table-column prop="status" label="Status" width="140" />
+                    <el-table-column prop="date" label="Date" width="190" />
+                  </el-table>
+                </section>
+
+                <section class="drawer-section">
+                  <h3>Medications</h3>
+                  <el-table
+                    :data="selectedUnlinkedMedicationRows"
+                    border
+                    empty-text="No unlinked medications in this period."
+                  >
+                    <el-table-column prop="name" label="Medication" min-width="280" />
+                    <el-table-column prop="status" label="Status" width="140" />
+                    <el-table-column prop="date" label="Prescribed At" width="190" />
+                  </el-table>
+                </section>
+
+                <section class="drawer-section">
+                  <h3>Procedures</h3>
+                  <el-table
+                    :data="selectedUnlinkedProcedureRows"
+                    border
+                    empty-text="No unlinked procedures in this period."
+                  >
+                    <el-table-column prop="name" label="Procedure" min-width="280" />
+                    <el-table-column prop="status" label="Status" width="140" />
+                    <el-table-column prop="date" label="Date" width="190" />
+                  </el-table>
+                </section>
+              </template>
+            </el-drawer>
           </template>
-        </el-drawer>
+        </section>
+      </el-tab-pane>
 
-        <el-drawer
-          v-model="unlinkedClinicalDrawerVisible"
-          size="52%"
-          :title="`Unlinked Clinical Records - ${selectedUnlinkedClinicalGroup?.period || ''}`"
-        >
-          <template v-if="selectedUnlinkedClinicalGroup">
-            <section class="drawer-section">
-              <h3>Lab / Vital Results</h3>
-              <el-table
-                :data="selectedUnlinkedLabRows"
-                border
-                empty-text="No unlinked lab or vital results in this period."
-              >
-                <el-table-column prop="name" label="Item" min-width="260" />
-                <el-table-column prop="value" label="Result" min-width="180" />
-                <el-table-column prop="status" label="Status" width="140" />
-                <el-table-column prop="date" label="Date" width="190" />
-              </el-table>
-            </section>
+      <!-- 医生授权管理 Tab -->
+      <el-tab-pane label="Doctor Authorization" name="auth">
+        <section v-loading="loadingAuth" class="auth-page">
+          <!-- 待审批申请 -->
+          <el-card class="auth-card" shadow="never">
+            <template #header>
+              <span>Pending Requests ({{ pendingConsents.length }})</span>
+            </template>
 
-            <section class="drawer-section">
-              <h3>Medications</h3>
-              <el-table
-                :data="selectedUnlinkedMedicationRows"
-                border
-                empty-text="No unlinked medications in this period."
-              >
-                <el-table-column prop="name" label="Medication" min-width="280" />
-                <el-table-column prop="status" label="Status" width="140" />
-                <el-table-column prop="date" label="Prescribed At" width="190" />
-              </el-table>
-            </section>
+            <el-table :data="pendingConsents" border empty-text="No pending requests">
+              <el-table-column prop="doctor_name" label="Doctor" width="180" />
+              <el-table-column label="Request Type" width="140">
+                <template #default="{ row }">
+                  <el-tag :type="row.record_scope === 'EXTRA' ? 'success' : 'info'" size="small">
+                    {{ row.record_scope === 'EXTRA' ? 'Full Access' : 'Default Access' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="request_reason" label="Reason" min-width="200" />
+              <el-table-column prop="created_at" label="Requested At" width="180">
+                <template #default="{ row }">
+                  {{ formatDateTime(row.created_at) }}
+                </template>
+              </el-table-column>
+              <el-table-column label="Action" width="180">
+                <template #default="{ row }">
+                  <el-button type="success" size="small" @click="handleApprove(row.consent_id)">
+                    Approve
+                  </el-button>
+                  <el-button type="danger" size="small" @click="handleReject(row.consent_id)">
+                    Reject
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-card>
 
-            <section class="drawer-section">
-              <h3>Procedures</h3>
-              <el-table
-                :data="selectedUnlinkedProcedureRows"
-                border
-                empty-text="No unlinked procedures in this period."
-              >
-                <el-table-column prop="name" label="Procedure" min-width="280" />
-                <el-table-column prop="status" label="Status" width="140" />
-                <el-table-column prop="date" label="Date" width="190" />
-              </el-table>
-            </section>
-          </template>
-        </el-drawer>
-      </template>
-    </section>
+          <!-- 已授权医生 -->
+          <el-card class="auth-card" shadow="never">
+            <template #header>
+              <span>Authorized Doctors ({{ authorizedDoctors.length }})</span>
+            </template>
+
+            <el-table :data="authorizedDoctors" border empty-text="No authorized doctors">
+              <el-table-column prop="doctor_name" label="Doctor" width="180" />
+              <el-table-column label="Access Level" width="140">
+                <template #default="{ row }">
+                  <el-tag :type="row.record_scope === 'EXTRA' ? 'success' : 'info'" size="small">
+                    {{ row.record_scope === 'EXTRA' ? 'Full Access' : 'Default Access' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="granted_at" label="Granted At" width="180">
+                <template #default="{ row }">
+                  {{ formatDateTime(row.granted_at) }}
+                </template>
+              </el-table-column>
+              <el-table-column label="Action" width="120">
+                <template #default="{ row }">
+                  <el-button type="danger" size="small" @click="handleRevoke(row.consent_id, row.doctor_name)">
+                    Revoke
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-card>
+        </section>
+      </el-tab-pane>
+    </el-tabs>
   </DashboardLayout>
 </template>
 
 <style scoped>
 .record-page {
   margin-top: 20px;
+}
+
+.auth-page {
+  margin-top: 20px;
+}
+
+.auth-card {
+  margin-bottom: 24px;
+  border-radius: 8px;
 }
 
 .overview-panel {
