@@ -26,20 +26,21 @@
 
 ### 医生端
 
-- 首页展示“我的病人列表”
-- 病人按状态分组：默认授权、额外授权待审批、已过期、已撤销
+- 首页展示“我的病人列表”，按状态分组（Full Access、Default Access、Pending Approval、Rejected、Revoked）
 - 默认授权病人可直接查看默认范围内的必要病历信息
+- 医生可搜索患者并提交授权申请（支持 Default Access 和 Full Access）
 - 超出默认范围的内容需要提交额外授权申请
+- 被拒绝的申请可重新提交
 - 患者撤销授权后，医生再次访问会被拒绝
 
 ### 患者端
 
-- 查看自己的病历
-- 查看哪些医生拥有默认访问权限
-- 查看医生额外访问申请
-- 审批或拒绝额外授权
-- 随时撤销医生访问权限
-- 查看自己的访问日志
+- 查看自己的加密病历并自动解密展示
+- 查看哪些医生拥有访问权限
+- 查看医生待审批的授权申请
+- 审批或拒绝医生的授权申请
+- 随时撤销医生的访问权限
+- 查看自己的病历诊断、检查结果、用药记录等
 
 ### 病历安全
 
@@ -107,8 +108,9 @@ flowchart LR
 | `users` | 登录账号、密码哈希、角色、状态 |
 | `patients` | 患者基本信息，与用户账号关联 |
 | `medical_records` | 加密后的病历数据、nonce、来源、记录类型 |
-| `doctors` | 医生信息、科室、执照号、审核状态，待实现 |
-| `consents` | 默认临床授权、额外访问申请与患者撤销记录，待实现 |
+| `doctors` | 医生信息、科室、执照号、审核状态|
+| `consents` | 默认临床授权、额外访问申请与患者撤销记录|
+|`access_logs`|安全审计日志，已创建表结构|
 | `audit_logs` | 安全审计日志和哈希链字段，待实现 |
 
 ## 最小演示目标
@@ -133,10 +135,21 @@ flowchart LR
 - 后端从 `backend/.env` 读取数据库、JWT、病历加密密钥等配置。
 - 增加 `MEDICAL_RECORD_KEY` 配置，用于 AES-GCM 病历加密。
 - 增加北京时间工具 `backend/app/core/timezone.py`。
-- 增加 `patients`、`medical_records` SQLAlchemy 模型。
+- 增加 `patients`、`medical_records`、`consents`、`access_logs` SQLAlchemy 模型。
 - 增加患者本人病历接口：
   - `GET /api/patient/me/records`
   - `GET /api/patient/me/records/{record_id}`
+- 增加患者授权管理接口：
+  - `GET /api/patient/me/records/pending-consents`（查看待审批申请）
+  - `POST /api/patient/me/records/consents/{id}/approve`（批准申请）
+  - `POST /api/patient/me/records/consents/{id}/reject`（拒绝申请）
+  - `GET /api/patient/me/records/my-doctors`（查看已授权医生）
+  - `POST /api/patient/me/records/consents/{id}/revoke`（撤销授权）
+- 增加医生端接口：
+  - `GET /api/doctor/my-patients`（我的病人列表，按状态分组）
+  - `POST /api/doctor/access-requests`（提交授权申请）
+  - `GET /api/doctor/patients/{patient_id}/records`（查看脱敏病历）
+  - `GET /api/doctor/search-patients`（搜索患者，带状态标识）
 - 患者接口会校验当前用户必须是 `PATIENT`，并且只能访问绑定到自己账号的病历。
 - 增加 `backend/app/services/crypto_service.py`，用于加密和解密结构化病历 JSON。
 - 增加 `backend/scripts/import_synthea_records.py`：
@@ -147,16 +160,20 @@ flowchart LR
   - 将导入患者绑定到患者演示账号
   - 将结构化病历加密写入 `medical_records`
 
+
 ### 数据库
 
 - `users.created_at`、`users.last_login_at` 改为 `TIMESTAMPTZ`。
 - 新增 `patients` 表，保存合成患者基础信息。
 - 新增 `medical_records` 表，保存加密病历、nonce、数据来源和记录类型。
+- 新增 `consents` 表，保存授权记录（status: ACTIVE/PENDING/REJECTED/REVOKED，scope: DEFAULT/EXTRA）。
+- 新增 `access_logs` 表，保存审计日志。
 - 保留演示账号种子 SQL：`database/seed_users.sql`。
 - 新增一键数据库脚本：`database/setup_opengauss_copy.ps1`。
 - 当前本地新版开发库使用独立容器 `healthcare-opengauss-dev`，映射到本机 `5433`，数据库名为 `health_security`。
 - 当前新版开发库已导入 100 个患者和 100 条加密病历，`patient1` 到 `patient10` 已绑定到前 10 个患者账号。
-- 旧容器 `my_opengauss` 保留给其他项目使用，其中的 `music` 数据库不要删除或修改。
+
+
 
 ### 前端
 
@@ -165,6 +182,8 @@ flowchart LR
 - 登录页支持回车提交，避免重复提交。
 - Dashboard 顶部显示用户名和角色标签。
 - 新增患者病历 API 封装 `frontend/src/api/patientRecords.ts`。
+- 新增患者授权管理 API 封装 `frontend/src/api/patientAuth.ts`。
+- 新增医生端 API 封装 `frontend/src/api/doctor.ts`。
 - 患者端 Dashboard 已从占位页升级为可用病历页面：
   - 加载患者本人加密病历并展示解密后的内容
   - 展示患者基本信息
@@ -172,6 +191,20 @@ flowchart LR
   - 诊断列表支持按日期搜索
   - 诊断详情抽屉展示相关就诊、用药、检查和操作
   - 未能关联到诊断的临床记录按年/月/日分组展示
+  - **新增"Doctor Authorization"Tab**：
+    - 查看待审批的医生授权申请
+    - 批准/拒绝医生的申请
+    - 查看已授权的医生列表
+    - 撤销医生访问权限
+- 医生端 Dashboard 已从占位页升级为完整功能页面：
+  - 我的病人列表按 5 个状态分组（Full Access、Default Access、Pending Approval、Rejected、Revoked）
+  - 查看患者的脱敏病历
+  - 申请 Full Access 权限
+  - **新增搜索患者页面**：
+    - 按姓名搜索患者
+    - 根据授权状态显示不同的操作按钮
+    - 支持申请 Default Access 和 Full Access
+    - 被拒绝后可重新申请
 
 ## 当前实现进度
 
@@ -184,13 +217,14 @@ flowchart LR
 | Synthea 数据导入 | 已完成初版 | 可导入 FHIR JSON，生成患者信息和结构化病历 |
 | 病历加密存储 | 已完成初版 | AES-GCM 加密病历 JSON，数据库中不保存明文病历正文 |
 | 患者本人查看病历 | 已完成初版 | 患者演示账号登录后可查看绑定到自己的病历 |
-| 医生“我的病人列表” | 未完成 | 后续实现 |
-| 默认授权与撤销 | 未完成 | 后续实现 |
-| 额外授权申请 | 未完成 | 后续实现 |
-| 字段脱敏策略 | 未完成 | 当前患者本人视图展示完整导入内容 |
-| 审计日志 | 未完成 | 后续实现 |
+| 医生“我的病人列表” | 已完成 | 按 Full Access、Default Access、Pending Approval、Rejected、Revoked 五组显示 |
+| 医生搜索患者| 已完成 | 支持按姓名模糊查询搜索，根据授权状态显示不同操作按钮 |
+| 默认授权与撤销 | 已完成 | 患者可查看已授权医生并撤销  |
+| 额外授权申请 |  已完成  | 医生提交 → 患者审批 → 授权生效的完整流程  |
+| 字段脱敏策略 | 已完成  | 查看待审批申请、批准/拒绝、查看已授权医生、撤销授权 |
+| 审计日志 | 已创建表结构 |  `access_logs` 表已创建，待成员 D 完善哈希链验证 |
 | 哈希链完整性验证 | 未完成 | 后续实现 |
-| 管理员/医生/审计员页面 | 占位完成 | 登录和跳转可用，业务功能待补充 |
+| 管理员/审计员页面 | 占位完成 | 登录和跳转可用，业务功能待补充 |
 
 ## 项目结构
 
@@ -199,6 +233,10 @@ Smart-Healthcare-Record-System/
 ├── backend/                    # FastAPI 后端
 │   ├── app/
 │   │   ├── api/                # API 路由
+│   │   │   ├── auth.py         # 登录认证
+│   │   │   ├── doctor.py       # 医生端接口
+│   │   │   ├── patient_records.py  # 患者病历和授权接口
+│   │   │   └── ...
 │   │   ├── core/               # 配置、认证、安全工具
 │   │   ├── db/                 # SQLAlchemy session
 │   │   ├── models/             # 数据库模型
@@ -210,10 +248,19 @@ Smart-Healthcare-Record-System/
 ├── frontend/                   # Vue 3 前端
 │   ├── src/
 │   │   ├── api/                # 前端 API 封装
+│   │   │   ├── auth.ts         # 认证 API
+│   │   │   ├── doctor.ts       # 医生端 API
+│   │   │   ├── patientRecords.ts   # 患者病历 API
+│   │   │   └── patientAuth.ts      # 患者授权 API
 │   │   ├── layouts/            # 页面布局
 │   │   ├── router/             # 路由和角色跳转
 │   │   ├── stores/             # Pinia 状态
 │   │   └── views/              # 登录页和各角色页面
+│   │       ├── Login.vue
+│   │       ├── PatientDashboard.vue   # 患者端（病历+授权管理）
+│   │       ├── DoctorDashboard.vue    # 医生端（病人列表+搜索）
+│   │       ├── AdminDashboard.vue
+│   │       └── AuditorDashboard.vue
 │   └── run_dev.ps1
 ├── database/
 │   ├── schema.sql              # 建表 SQL
@@ -656,17 +703,31 @@ password123
 8. 进入患者 Dashboard，查看患者基础信息、诊断列表、相关就诊、检查、用药、操作记录。
 9. 查询 `medical_records.encrypted_data`，验证病历正文以密文保存。
 
+### 医生端
+
+1. 使用 doctor1 登录，进入医生 Dashboard，查看 “我的病人列表”（5 个分组）。
+2. 点击 “搜索患者”，输入患者名称搜索，根据患者授权状态显示智能操作按钮。
+3. 对未授权患者，提交 DEFAULT/EXTRA 类型授权申请（填写申请理由）。
+4. 申请提交后，患者端会显示待审批申请，医生端患者移至 Pending Approval 分组。
+5. 患者批准申请后，医生端患者移至对应分组（Default Access/Full Access）。
+6. 点击 “查看病历”，查看按授权范围脱敏后的患者病历内容。
+7. 患者撤销授权后，医生端患者移至 Revoked 分组，再次查看病历会被拒绝。
+8. 被拒绝的申请可重新提交，已有 Full Access 的患者不显示申请按钮，已有 Default Access 的患者只显示 Apply Full Access 按钮。
+
+### 患者端
+1. 使用 patient1-10 登录，进入患者 Dashboard，查看本人病历、统计数据、诊断列表。
+2. 切换到 Doctor Authorization Tab，查看待审批授权申请。
+3. 对申请进行批准 / 拒绝操作（可填写审批备注）。
+4. 查看已授权医生列表，对任意医生执行撤销授权操作。
+5. 撤销授权后，对应医生将无法再查看该患者病历。
+
 ## 后续待办
 
-- 实现医生“我的病人列表”。
-- 实现默认临床授权、额外授权申请、患者审批/拒绝、撤销授权。
-- 实现医生视角的病历字段脱敏策略。
 - 实现审计日志，记录登录、查看病历、拒绝访问、授权变更等行为。
 - 实现审计日志 SHA-256 哈希链和完整性验证接口。
-- 补齐管理员、医生、审计员页面的业务功能。
+- 补齐管理员、审计员页面的业务功能。
 - 准备最终演示脚本和报告截图。
 
-- 成员 C：继续实现 `doctors`、`consents` 表，医生病人列表、默认授权、额外授权申请、患者审批/拒绝/撤销和字段脱敏。
 - 成员 D：继续实现 `audit_logs` 表，访问日志、拒绝日志、SHA-256 哈希链和完整性验证页面。
 - 所有后端受保护接口都应复用 `get_current_user()` 或 `require_roles()`，不要在各模块重复实现登录认证。
 
