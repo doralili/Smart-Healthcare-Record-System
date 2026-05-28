@@ -56,11 +56,19 @@ def get_current_user(
 
 def require_roles(*allowed_roles: str) -> Callable:
     def role_checker(current_user: User = Depends(get_current_user)) -> User:
+        print(f"=== DEBUG require_roles ===")
+        print(f"allowed_roles: {allowed_roles}")
+        print(f"current_user.role: '{current_user.role}'")
+        print(f"current_user.id: {current_user.id}")
+        print(f"current_user.username: {current_user.username}")
+        
         if current_user.role not in allowed_roles:
+            print(f"❌ 403 - role '{current_user.role}' not in {allowed_roles}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Permission denied",
             )
+        print(f"✅ 权限通过")
         return current_user
 
     return role_checker
