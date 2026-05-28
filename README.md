@@ -479,6 +479,8 @@ TZ=Asia/Shanghai
 
 注意：数据库密码里的 `@` 在 URL 中要写成 `%40`，所以 `OpenGauss@123` 在 `DATABASE_URL` 里写成 `OpenGauss%40123`。
 
+注意：上方DATABASE_URL,JWT_SECRET,一直到TZ 都要改为小写，否则程序无法正常运行；倘若改为小写也无法登录，请查看是否是omm权限导致的，最好新建立一个账户，并更改env。
+
 注意：`MEDICAL_RECORD_KEY` 必须是 base64 编码后的 32 字节密钥。如果数据库里已经有加密病历，换密钥后旧病历将无法解密。
 
 如果同学使用你导出的 dump 文件，里面的 `medical_records.encrypted_data` 也会被复制过去。要让后端正常解密这些病历，同学的 `backend/.env` 必须使用你导入病历时相同的 `MEDICAL_RECORD_KEY`。
