@@ -24,7 +24,7 @@ api.interceptors.response.use(
 
 // 获取我的患者
 export function getMyPatients() {
-  return api.get('/api/doctor/my-patients')
+  return api.get<unknown, { patient_list: any[] }>('/api/doctor/my-patients')
 }
 
 // 提交授权申请
@@ -34,5 +34,5 @@ export function submitAccessRequest(data: any) {
 
 // 获取脱敏病历
 export function getPatientRecord(patientId: number) {
-  return api.get(`/api/doctor/patients/${patientId}/records`)
+  return api.get<unknown, { medical_record: any }>(`/api/doctor/patients/${patientId}/records`)
 }

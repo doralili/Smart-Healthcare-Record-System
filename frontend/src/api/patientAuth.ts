@@ -32,9 +32,17 @@ export interface AuthorizedDoctor {
   granted_at: string
 }
 
+export interface PendingConsentResponse {
+  pending_consents: PendingConsent[]
+}
+
+export interface AuthorizedDoctorResponse {
+  doctors: AuthorizedDoctor[]
+}
+
 // 获取待审批申请
 export function getPendingConsents(token: string) {
-  return api.get('/api/patient/me/records/pending-consents', {
+  return api.get<unknown, PendingConsentResponse>('/api/patient/me/records/pending-consents', {
     headers: { Authorization: `Bearer ${token}` }
   })
 }
@@ -55,7 +63,7 @@ export function rejectConsent(token: string, consentId: number) {
 
 // 获取已授权医生列表
 export function getMyDoctors(token: string) {
-  return api.get('/api/patient/me/records/my-doctors', {
+  return api.get<unknown, AuthorizedDoctorResponse>('/api/patient/me/records/my-doctors', {
     headers: { Authorization: `Bearer ${token}` }
   })
 }

@@ -9,6 +9,7 @@ from app.models.patient import Patient
 from app.models.consent import Consent
 from app.models.user import User
 from app.services.crypto_service import MedicalRecordCryptoError, decrypt_record_json
+from app.services.audit_service import write_audit_log
 
 
 router = APIRouter(prefix="/api/patient/me/records", tags=["patient-records"])
@@ -92,6 +93,19 @@ def approve_consent(
     
     consent.status = "ACTIVE"
     consent.approved_at = datetime.now()
+    write_audit_log(
+        db,
+        action="CONSENT_APPROVE",
+        actor=current_user,
+        target_type="consent",
+        target_id=consent.id,
+        doctor_id=consent.doctor_id,
+        patient_id=consent.patient_id,
+        consent_id=consent.id,
+        record_scope=consent.record_scope,
+        outcome="SUCCESS",
+        detail="Patient approved doctor access request",
+    )
     db.commit()
     
     return {"msg": "Access granted"}
@@ -116,6 +130,19 @@ def reject_consent(
         raise HTTPException(status_code=400, detail="Already processed")
     
     consent.status = "REJECTED"
+    write_audit_log(
+        db,
+        action="CONSENT_REJECT",
+        actor=current_user,
+        target_type="consent",
+        target_id=consent.id,
+        doctor_id=consent.doctor_id,
+        patient_id=consent.patient_id,
+        consent_id=consent.id,
+        record_scope=consent.record_scope,
+        outcome="DENIED",
+        detail="Patient rejected doctor access request",
+    )
     db.commit()
     
     return {"msg": "Access denied"}
@@ -141,6 +168,19 @@ def revoke_consent(
     
     consent.status = "REVOKED"
     consent.revoked_at = datetime.now()
+    write_audit_log(
+        db,
+        action="CONSENT_REVOKE",
+        actor=current_user,
+        target_type="consent",
+        target_id=consent.id,
+        doctor_id=consent.doctor_id,
+        patient_id=consent.patient_id,
+        consent_id=consent.id,
+        record_scope=consent.record_scope,
+        outcome="SUCCESS",
+        detail="Patient revoked doctor access",
+    )
     db.commit()
     
     return {"msg": "Access revoked"}
@@ -202,6 +242,18 @@ def get_my_record_detail(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to decrypt medical record",
         ) from exc
+
+    write_audit_log(
+        db,
+        action="PATIENT_VIEW_OWN_RECORD",
+        actor=current_user,
+        target_type="medical_record",
+        target_id=record.id,
+        patient_id=patient.id,
+        outcome="SUCCESS",
+        detail="Patient viewed own medical record",
+    )
+    db.commit()
 
     return {
         "id": record.id,

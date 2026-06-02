@@ -809,10 +809,14 @@ async function handleRevoke(consentId: number, doctorName: string) {
 }
 
 // 新增：切换 Tab 时加载数据
-async function onTabChange(tab: string) {
+async function onTabChange(tab: any) {
   if (tab === 'auth') {
     await Promise.all([loadPendingConsents(), loadMyDoctors()]);
   }
+}
+
+async function handleTabClick(tab: any) {
+  await onTabChange(tab.paneName);
 }
 
 onMounted(() => {
@@ -824,7 +828,7 @@ onMounted(() => {
 
 <template>
   <DashboardLayout title="Patient Dashboard">
-    <el-tabs v-model="activeTab" @tab-click="(tab) => onTabChange(tab.paneName)">
+    <el-tabs v-model="activeTab" @tab-click="handleTabClick">
       <!-- 我的病历 Tab -->
       <el-tab-pane label="My Records" name="records">
         <section v-loading="loading" class="record-page">

@@ -2,11 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import DashboardLayout from "../layouts/DashboardLayout.vue"
-import { useAuthStore } from '../stores/auth'
 import { getMyPatients, submitAccessRequest, getPatientRecord } from '../api/doctor'
-
-const authStore = useAuthStore()
-const user = authStore.user
 
 const activeTab = ref('patients')
 const searchKeyword = ref('')
@@ -258,7 +254,7 @@ onMounted(() => {
               </template>
             </el-table-column>
             <el-table-column label="Action" min-width="280">
-              <template #default="{ row }">
+              <template #default>
                 <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                   <el-button
                     type="primary"
@@ -295,7 +291,7 @@ onMounted(() => {
               </template>
             </el-table-column>
             <el-table-column label="Scope" width="120">
-              <template #default="{ row }">
+              <template #default>
                 <el-tag type="danger" size="small">
                   Rejected
                 </el-tag>
@@ -339,14 +335,14 @@ onMounted(() => {
               </template>
             </el-table-column>
             <el-table-column label="Scope" width="120">
-              <template #default="{ row }">
+              <template #default>
                 <el-tag type="danger" size="small">
                   Revoked
                 </el-tag>
               </template>
             </el-table-column>
             <el-table-column label="Action" min-width="280">
-              <template #default="{ row }">
+              <template #default>
                 <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                   <el-button
                     type="primary"

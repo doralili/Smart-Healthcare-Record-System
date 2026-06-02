@@ -6,6 +6,7 @@ from app.models.consent import Consent
 from app.models.patient import Patient
 from app.schemas.doctor import AccessRequestCreate
 from app.services.masking import mask_record_by_scope
+from app.services.audit_service import write_audit_log
 
 router = APIRouter(prefix="/api/doctor", tags=["医生业务模块"])
 
@@ -70,6 +71,7 @@ def submit_access_request(
             existing.request_reason = info.reason
         else:
             raise HTTPException(status_code=400, detail="Invalid status")
+        consent_for_log = existing
     else:
         # 无记录：创建新记录
         new_consent = Consent(
@@ -81,7 +83,22 @@ def submit_access_request(
             consent_source="EXPLICIT_REQUEST"
         )
         db.add(new_consent)
+        db.flush()
+        consent_for_log = new_consent
     
+    write_audit_log(
+        db,
+        action="CONSENT_REQUEST",
+        actor=current_user,
+        target_type="patient",
+        target_id=info.patient_id,
+        doctor_id=current_user.id,
+        patient_id=info.patient_id,
+        consent_id=consent_for_log.id,
+        record_scope=info.record_scope,
+        outcome="SUCCESS",
+        detail=info.reason,
+    )
     db.commit()
     return {"msg": "Access request submitted, waiting for patient approval"}
 # 查看脱敏后患者病历
@@ -114,6 +131,19 @@ def get_patient_mask_record(
         record_scope=valid_consent.record_scope if valid_consent else None
     )
     db.add(log)
+    write_audit_log(
+        db,
+        action="VIEW_RECORD",
+        actor=current_user,
+        target_type="patient",
+        target_id=patient_id,
+        doctor_id=current_user.id,
+        patient_id=patient_id,
+        consent_id=valid_consent.id if valid_consent else None,
+        record_scope=valid_consent.record_scope if valid_consent else None,
+        outcome="SUCCESS" if valid_consent else "DENIED",
+        detail="Doctor viewed patient medical record" if valid_consent else "Doctor record view denied",
+    )
     db.commit()
 
     # 3. 无权限拒绝

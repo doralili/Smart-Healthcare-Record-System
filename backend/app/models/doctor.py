@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Boolean, TIMESTAMP
 from sqlalchemy.sql import func
-from app.core.db import Base
+from app.db.session import Base
 
 class Doctor(Base):
     __tablename__ = "doctors"

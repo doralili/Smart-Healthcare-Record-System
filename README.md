@@ -111,8 +111,8 @@ flowchart LR
 | `medical_records` | 加密后的病历数据、nonce、来源、记录类型 |
 | `doctors` | 医生信息、科室、执照号、审核状态|
 | `consents` | 默认临床授权、额外访问申请与患者撤销记录|
-|`access_logs`|安全审计日志，已创建表结构|
-| `audit_logs` | 安全审计日志和哈希链字段，待实现 |
+|`access_logs`|医生查看/拒绝查看病历的访问日志|
+| `audit_logs` | 带 SHA-256 哈希链的安全审计日志 |
 
 ## 最小演示目标
 
@@ -136,7 +136,7 @@ flowchart LR
 - 后端从 `backend/.env` 读取数据库、JWT、病历加密密钥等配置。
 - 增加 `MEDICAL_RECORD_KEY` 配置，用于 AES-GCM 病历加密。
 - 增加北京时间工具 `backend/app/core/timezone.py`。
-- 增加 `patients`、`medical_records`、`consents`、`access_logs` SQLAlchemy 模型。
+- 增加 `patients`、`medical_records`、`consents`、`access_logs`、`audit_logs` SQLAlchemy 模型。
 - 增加患者本人病历接口：
   - `GET /api/patient/me/records`
   - `GET /api/patient/me/records/{record_id}`
@@ -151,6 +151,10 @@ flowchart LR
   - `POST /api/doctor/access-requests`（提交授权申请）
   - `GET /api/doctor/patients/{patient_id}/records`（查看脱敏病历）
   - `GET /api/doctor/search-patients`（搜索患者，带状态标识）
+- 增加审计员接口：
+  - `GET /api/auditor/summary`（审计日志统计）
+  - `GET /api/auditor/audit-logs`（查看最近审计日志）
+  - `GET /api/auditor/verify-hash-chain`（验证审计日志哈希链）
 - 患者接口会校验当前用户必须是 `PATIENT`，并且只能访问绑定到自己账号的病历。
 - 增加 `backend/app/services/crypto_service.py`，用于加密和解密结构化病历 JSON。
 - 增加 `backend/scripts/import_synthea_records.py`：
@@ -169,6 +173,7 @@ flowchart LR
 - 新增 `medical_records` 表，保存加密病历、nonce、数据来源和记录类型。
 - 新增 `consents` 表，保存授权记录（status: ACTIVE/PENDING/REJECTED/REVOKED，scope: DEFAULT/EXTRA）。
 - 新增 `access_logs` 表，保存审计日志。
+- 新增 `audit_logs` 表，保存登录、授权、病历访问等关键事件及 SHA-256 哈希链。
 - 保留演示账号种子 SQL：`database/seed_users.sql`。
 - 新增一键数据库脚本：`database/setup_opengauss_copy.ps1`。
 - 当前本地新版开发库使用独立容器 `healthcare-opengauss-dev`，映射到本机 `5433`，数据库名为 `health_security`。
@@ -206,6 +211,11 @@ flowchart LR
     - 根据授权状态显示不同的操作按钮
     - 支持申请 Default Access 和 Full Access
     - 被拒绝后可重新申请
+- 审计员 Dashboard 已从占位页升级为审计页面：
+  - 查看审计日志总数、拒绝事件数和最新事件时间
+  - 查看各类审计动作统计
+  - 查看最近审计日志及哈希摘要
+  - 一键验证 SHA-256 哈希链完整性
 
 ## 当前实现进度
 
@@ -223,11 +233,14 @@ flowchart LR
 | 默认授权与撤销 | 已完成 | 患者可查看已授权医生并撤销  |
 | 额外授权申请 |  已完成  | 医生提交 → 患者审批 → 授权生效的完整流程  |
 | 字段脱敏策略 | 已完成  | 查看待审批申请、批准/拒绝、查看已授权医生、撤销授权 |
-| 审计日志 | 已创建表结构 |  `access_logs` 表已创建，待成员 D 完善哈希链验证 |
-| 哈希链完整性验证 | 未完成 | 后续实现 |
-| 管理员/审计员页面 | 占位完成 | 登录和跳转可用，业务功能待补充 |
+| 审计日志 | 已完成初版 | `access_logs` 记录医生访问，`audit_logs` 记录登录、授权、病历访问和拒绝事件 |
+| 哈希链完整性验证 | 已完成初版 | `audit_logs` 使用 SHA-256 前后哈希链，审计员可验证完整性 |
+| 管理员页面 | 占位完成 | 登录和跳转可用，业务功能待补充 |
+| 审计员页面 | 已完成初版 | 可查看审计统计、日志列表并验证哈希链 |
 
-其中已建立的access_logs表包含的字段有：id，doctor_id，patient_id ，consent_id，action，record_scope
+其中 `access_logs` 表包含的字段有：id，doctor_id，patient_id，consent_id，action，record_scope。
+
+其中 `audit_logs` 表包含的关键字段有：actor_user_id，actor_role，action，doctor_id，patient_id，consent_id，record_scope，outcome，previous_hash，current_hash。
 
 
 ## 项目结构
@@ -430,6 +443,15 @@ gsql -d health_security
 
 ```sql
 SELECT id, username, role, status FROM users;
+```
+
+如果本机 openGauss 禁止 `omm` 从宿主机远程连接，可以新建普通数据库用户，例如 `healthcare`，专门给后端 `.env` 使用。`omm` 仍然用于进入容器后执行 `gsql`。当前数据库表仍在默认 `public` schema 下，所以查询审计日志直接写表名即可：
+
+```sql
+SELECT id, action, outcome, current_hash
+FROM audit_logs
+ORDER BY id
+LIMIT 5;
 ```
 
 退出：
@@ -695,7 +717,7 @@ password123
 | `patient1` - `patient10` | `PATIENT` | `/patient` | 查看绑定到自己的加密病历 |
 | `doctor1` | `DOCTOR` | `/doctor` | 登录和页面跳转，占位页 |
 | `admin` | `ADMIN` | `/admin` | 登录和页面跳转，占位页 |
-| `auditor` | `AUDITOR` | `/auditor` | 登录和页面跳转，占位页 |
+| `auditor` | `AUDITOR` | `/auditor` | 查看审计统计、审计日志和哈希链验证结果 |
 
 ## 当前可演示流程
 
@@ -727,14 +749,21 @@ password123
 4. 查看已授权医生列表，对任意医生执行撤销授权操作。
 5. 撤销授权后，对应医生将无法再查看该患者病历。
 
+### 审计员端
+1. 使用 auditor 登录，进入 Auditor Dashboard。
+2. 查看审计日志总数、拒绝事件数、最新事件时间和动作统计。
+3. 查看最近审计日志列表，确认登录、授权申请、审批/拒绝/撤销、病历访问和拒绝访问均被记录。
+4. 点击 Verify Hash Chain，验证 `audit_logs` 中的 SHA-256 哈希链是否完整。
+5. 如果手动篡改旧日志的关键字段，验证结果会提示断裂位置。
+
+如果需要在数据库里手动查看或篡改审计日志做演示，进入 `health_security` 后直接操作 `audit_logs` 表。
+
 ## 后续待办
 
-- 实现审计日志，记录登录、查看病历、拒绝访问、授权变更等行为。
-- 实现审计日志 SHA-256 哈希链和完整性验证接口。
-- 补齐管理员、审计员页面的业务功能。
+- 补齐管理员页面的业务功能。
 - 准备最终演示脚本和报告截图。
 
-- 成员 D：继续实现 `audit_logs` 表，访问日志、拒绝日志、SHA-256 哈希链和完整性验证页面。
+- 成员 D：继续整理审计日志演示脚本，补充报告截图和防篡改验证截图。
 - 所有后端受保护接口都应复用 `get_current_user()` 或 `require_roles()`，不要在各模块重复实现登录认证。
 
 ## 参考文档

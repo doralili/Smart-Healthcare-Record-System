@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, TIMESTAMP
 from sqlalchemy.sql import func
-from app.core.db import Base
+from app.db.session import Base
 
 class AccessLog(Base):
     __tablename__ = "access_logs"

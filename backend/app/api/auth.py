@@ -8,6 +8,7 @@ from app.core.timezone import now_beijing
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
+from app.services.audit_service import write_audit_log
 
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -47,6 +48,16 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
     )
 
     db.add(user)
+    db.flush()
+    write_audit_log(
+        db,
+        action="PATIENT_REGISTER",
+        actor=user,
+        target_type="user",
+        target_id=user.id,
+        outcome="SUCCESS",
+        detail="Patient self-registration",
+    )
     db.commit()
     db.refresh(user)
 
@@ -81,6 +92,15 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
             "WHERE id = :user_id"
         ),
         {"user_id": user.id},
+    )
+    write_audit_log(
+        db,
+        action="LOGIN",
+        actor=user,
+        target_type="user",
+        target_id=user.id,
+        outcome="SUCCESS",
+        detail="User signed in",
     )
     db.commit()
 
