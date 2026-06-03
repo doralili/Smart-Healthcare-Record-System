@@ -388,8 +388,12 @@ database/health_security.copy.sql
 这会创建新的 openGauss 容器，并把 dump 文件里的表结构和数据恢复进去，包括 `users`、`patients`、`medical_records` 等表。
 
 导入consent,access_log表：
-在PowerShell执行：
-
+1.从宿主机复制到容器
+```
+docker cp D:/Smart-Healthcare-Record-System/database/consents_schema.sql healthcare-opengauss-dev:/tmp/consents_schema.sql
+docker cp D:/Smart-Healthcare-Record-System/database/access_logs_schema.sql healthcare-opengauss-dev:/tmp/access_logs_schema.sql
+```
+2.执行导入
 ```
 docker exec -it healthcare-opengauss-dev bash
 su - omm
