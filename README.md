@@ -454,6 +454,17 @@ docker exec -u omm healthcare-opengauss-dev bash -lc "source /home/omm/.bashrc; 
 
 导入完成后继续执行下面的“创建后端数据库用户”步骤。
 
+#### 关于单独的 consents/access_logs SQL 文件
+
+仓库中保留了：
+
+```text
+database/consents_schema.sql
+database/access_logs_schema.sql
+```
+
+这两个文件可作为单表结构参考。正常运行项目时优先使用 `database/schema.sql`，因为当前主 schema 已经包含 `consents`、`access_logs` 和 `audit_logs`，并且支持管理员功能和审计哈希链。
+
 #### 如果只是想创建干净数据库
 
 ```powershell
