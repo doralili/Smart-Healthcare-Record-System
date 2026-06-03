@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.deps import get_db, get_current_user, require_roles
+from app.core.timezone import now_beijing
 from app.models.user import User
+from app.models.doctor import Doctor
 from app.models.consent import Consent
 from app.models.patient import Patient
 from app.schemas.doctor import AccessRequestCreate
@@ -10,6 +12,25 @@ from app.services.audit_service import write_audit_log
 
 router = APIRouter(prefix="/api/doctor", tags=["医生业务模块"])
 
+
+def ensure_doctor_approved(db: Session, user: User) -> None:
+    doctor = db.query(Doctor).filter(Doctor.user_id == user.id).first()
+    if doctor is None or not doctor.verified:
+        raise HTTPException(
+            status_code=403,
+            detail="Doctor account is pending admin approval",
+        )
+
+
+def consent_display_status(consent: Consent) -> str:
+    if (
+        consent.status == "ACTIVE"
+        and consent.end_time is not None
+        and consent.end_time <= now_beijing()
+    ):
+        return "EXPIRED"
+    return consent.status
+
 # 获取名下授权患者列表
 @router.get("/my-patients")
 def get_my_patients(
@@ -17,6 +38,7 @@ def get_my_patients(
     current_user: User = Depends(get_current_user),
     _=Depends(require_roles("DOCTOR"))
 ):
+    ensure_doctor_approved(db, current_user)
     # Query all consent records for this doctor (including PENDING, ACTIVE, REVOKED)
     consents = db.query(Consent).filter(
         Consent.doctor_id == current_user.id
@@ -34,7 +56,7 @@ def get_my_patients(
                 "birth_date": patient.birth_date,
                 "phone": patient.phone,
                 "address": patient.address,
-                "consent_status": consent.status,      # ACTIVE, PENDING, REVOKED
+                "consent_status": consent_display_status(consent),      # ACTIVE, PENDING, REVOKED, EXPIRED
                 "scope": consent.record_scope,         # DEFAULT, EXTRA
                 "consent_id": consent.id
             })
@@ -49,6 +71,7 @@ def submit_access_request(
     current_user: User = Depends(get_current_user),
     _=Depends(require_roles("DOCTOR"))
 ):
+    ensure_doctor_approved(db, current_user)
     # 查找是否已存在记录
     existing = db.query(Consent).filter(
         Consent.patient_id == info.patient_id,
@@ -110,6 +133,7 @@ def get_patient_mask_record(
     current_user: User = Depends(get_current_user),
     _=Depends(require_roles("DOCTOR"))
 ):
+    ensure_doctor_approved(db, current_user)
     from app.models.medical_record import MedicalRecord
     from app.services.crypto_service import decrypt_record_json
     from app.models.access_log import AccessLog
@@ -119,7 +143,9 @@ def get_patient_mask_record(
     valid_consent = db.query(Consent).filter(
         Consent.patient_id == patient_id,
         Consent.doctor_id == current_user.id,
-        Consent.status == "ACTIVE"
+        Consent.status == "ACTIVE",
+        Consent.end_time.isnot(None),
+        Consent.end_time > now_beijing(),
     ).first()
 
     # 2. 记录审计日志
@@ -262,6 +288,7 @@ def search_patients(
     current_user: User = Depends(get_current_user),
     _=Depends(require_roles("DOCTOR"))
 ):
+    ensure_doctor_approved(db, current_user)
     patients = db.query(Patient).filter(
         Patient.full_name.ilike(f"%{q}%")
     ).limit(20).all()
@@ -275,7 +302,7 @@ def search_patients(
     consent_map = {}
     for c in existing_consents:
         consent_map[c.patient_id] = {
-            "status": c.status,
+            "status": consent_display_status(c),
             "scope": c.record_scope
         }
     

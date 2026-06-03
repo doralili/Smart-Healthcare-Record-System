@@ -11,6 +11,7 @@ def ensure_audit_schema() -> None:
         name VARCHAR(100) NOT NULL,
         department VARCHAR(100) NULL,
         license_no VARCHAR(50) NULL,
+        note TEXT NULL,
         verified BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
@@ -87,7 +88,24 @@ def ensure_audit_schema() -> None:
 
     with engine.begin() as connection:
         connection.execute(text(create_doctors))
+        has_doctor_note = connection.execute(
+            text(
+                "SELECT 1 FROM pg_attribute "
+                "WHERE attrelid = 'doctors'::regclass "
+                "AND attname = 'note' "
+                "AND NOT attisdropped"
+            )
+        ).first()
+        if has_doctor_note is None:
+            connection.execute(text("ALTER TABLE doctors ADD COLUMN note TEXT NULL"))
         connection.execute(text(create_consents))
+        connection.execute(
+            text(
+                "UPDATE consents "
+                "SET end_time = COALESCE(start_time, approved_at, auto_granted_at, created_at) + interval '14 days' "
+                "WHERE status = 'ACTIVE' AND end_time IS NULL"
+            )
+        )
         connection.execute(text(create_access_logs))
         connection.execute(text(create_audit_logs))
         for statement in indexes:

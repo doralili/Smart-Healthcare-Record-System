@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import timedelta
 
 from app.core.deps import require_roles
+from app.core.timezone import now_beijing
 from app.db.session import get_db
 from app.models.medical_record import MedicalRecord
 from app.models.patient import Patient
@@ -13,6 +14,7 @@ from app.services.audit_service import write_audit_log
 
 
 router = APIRouter(prefix="/api/patient/me/records", tags=["patient-records"])
+CONSENT_VALID_DAYS = 14
 
 # ========== 具体路径的路由（必须放在动态路由之前） ==========
 
@@ -92,7 +94,10 @@ def approve_consent(
         raise HTTPException(status_code=400, detail="Already processed")
     
     consent.status = "ACTIVE"
-    consent.approved_at = datetime.now()
+    now = now_beijing()
+    consent.start_time = now
+    consent.approved_at = now
+    consent.end_time = now + timedelta(days=CONSENT_VALID_DAYS)
     write_audit_log(
         db,
         action="CONSENT_APPROVE",
@@ -167,7 +172,7 @@ def revoke_consent(
         raise HTTPException(status_code=400, detail="Only active consent can be revoked")
     
     consent.status = "REVOKED"
-    consent.revoked_at = datetime.now()
+    consent.revoked_at = now_beijing()
     write_audit_log(
         db,
         action="CONSENT_REVOKE",

@@ -31,6 +31,7 @@
 - 默认授权病人可直接查看默认范围内的必要病历信息
 - 医生可搜索患者并提交授权申请（支持 Default Access 和 Full Access）
 - 超出默认范围的内容需要提交额外授权申请
+- 默认授权和患者批准的授权默认有效期为 14 天，过期后医生需要重新获得授权
 - 被拒绝的申请可重新提交
 - 患者撤销授权后，医生再次访问会被拒绝
 
@@ -216,6 +217,13 @@ flowchart LR
   - 查看各类审计动作统计
   - 查看最近审计日志及哈希摘要
   - 一键验证 SHA-256 哈希链完整性
+- 管理员 Dashboard 已从占位页升级为管理页面：
+  - 查看用户、医生、患者、禁用账号、病历、授权和审计日志数量
+  - 创建医生、审计员、管理员账号
+  - 启用/禁用账号，重置密码
+  - 审核医生账号，从固定科室选项中维护科室、执业编号和备注
+  - 将患者分配给已审核医生，并自动生成 DEFAULT_CLINICAL 默认授权
+  - 展示管理员只能查看统计，不能查看解密病历正文的安全边界
 
 ## 当前实现进度
 
@@ -230,12 +238,12 @@ flowchart LR
 | 患者本人查看病历 | 已完成初版 | 患者演示账号登录后可查看绑定到自己的病历 |
 | 医生“我的病人列表” | 已完成 | 按 Full Access、Default Access、Pending Approval、Rejected、Revoked 五组显示 |
 | 医生搜索患者| 已完成 | 支持按姓名模糊查询搜索，根据授权状态显示不同操作按钮 |
-| 默认授权与撤销 | 已完成 | 患者可查看已授权医生并撤销  |
-| 额外授权申请 |  已完成  | 医生提交 → 患者审批 → 授权生效的完整流程  |
+| 默认授权与撤销 | 已完成 | 患者可查看已授权医生并撤销；默认授权有效期为 14 天 |
+| 额外授权申请 |  已完成  | 医生提交 → 患者审批 → 授权生效的完整流程；批准后有效期为 14 天 |
 | 字段脱敏策略 | 已完成  | 查看待审批申请、批准/拒绝、查看已授权医生、撤销授权 |
 | 审计日志 | 已完成初版 | `access_logs` 记录医生访问，`audit_logs` 记录登录、授权、病历访问和拒绝事件 |
 | 哈希链完整性验证 | 已完成初版 | `audit_logs` 使用 SHA-256 前后哈希链，审计员可验证完整性 |
-| 管理员页面 | 占位完成 | 登录和跳转可用，业务功能待补充 |
+| 管理员页面 | 已完成初版 | 可管理账号、审核医生、分配默认医患授权，并查看只读系统安全状态 |
 | 审计员页面 | 已完成初版 | 可查看审计统计、日志列表并验证哈希链 |
 
 其中 `access_logs` 表包含的字段有：id，doctor_id，patient_id，consent_id，action，record_scope。
@@ -384,6 +392,13 @@ healthcare-opengauss-dev  ->  localhost:5433/health_security
 
 旧容器 `my_opengauss` 中还保留其他项目的 `music` 数据库，不要把它当作本项目新版主库，也不要删除该容器。
 
+重要说明：
+
+- `omm` 是 openGauss 容器内的初始数据库用户，适合进入容器后执行 `gsql`。
+- 当前 openGauss 镜像会禁止 `omm` 从宿主机远程连接，后端 `.env` 不要使用 `omm`。
+- 后端推荐使用本地普通应用用户 `healthcare` 连接数据库。
+- 数据库脚本可能输出 `omm` 版本的 `DATABASE_URL`，实际配置后端时请使用下文的 `healthcare` 版本。
+
 #### 使用数据库 dump 文件恢复
 
 把dump文件放到：
@@ -399,6 +414,45 @@ database/health_security.copy.sql
 ```
 
 这会创建新的 openGauss 容器，并把 dump 文件里的表结构和数据恢复进去，包括 `users`、`patients`、`medical_records` 等表。
+
+#### 如果脚本提示 openGauss did not become ready in time
+
+有时 openGauss 容器实际已经启动，但脚本的 ready 检查没有识别到，会出现：
+
+```text
+openGauss did not become ready in time.
+```
+
+先检查容器是否仍在运行：
+
+```powershell
+docker ps
+```
+
+如果能看到 `healthcare-opengauss-dev`，可以手动完成数据库创建和 dump 导入。
+
+进入容器确认 openGauss 可用：
+
+```powershell
+docker exec -u omm healthcare-opengauss-dev bash -lc "source /home/omm/.bashrc; gsql -d postgres -c 'SELECT 1;'"
+```
+
+创建项目数据库：
+
+```powershell
+docker exec -u omm healthcare-opengauss-dev bash -lc "source /home/omm/.bashrc; gsql -d postgres -c 'CREATE DATABASE health_security;'"
+```
+
+如果提示数据库已存在，可以忽略这一步。
+
+复制并导入 dump：
+
+```powershell
+docker cp .\database\health_security.copy.sql healthcare-opengauss-dev:/tmp/health_security.copy.sql
+docker exec -u omm healthcare-opengauss-dev bash -lc "source /home/omm/.bashrc; gsql -d health_security -f /tmp/health_security.copy.sql"
+```
+
+导入完成后继续执行下面的“创建后端数据库用户”步骤。
 
 #### 如果只是想创建干净数据库
 
@@ -445,7 +499,24 @@ gsql -d health_security
 SELECT id, username, role, status FROM users;
 ```
 
-如果本机 openGauss 禁止 `omm` 从宿主机远程连接，可以新建普通数据库用户，例如 `healthcare`，专门给后端 `.env` 使用。`omm` 仍然用于进入容器后执行 `gsql`。当前数据库表仍在默认 `public` schema 下，所以查询审计日志直接写表名即可：
+#### 创建后端数据库用户
+
+后端不能用 `omm` 从宿主机连接数据库，需要创建普通应用用户 `healthcare`。
+
+仍在 `gsql -d health_security` 中执行：
+
+```sql
+CREATE USER healthcare WITH PASSWORD 'Healthcare@123';
+ALTER USER healthcare SET search_path TO public;
+GRANT ALL PRIVILEGES ON DATABASE health_security TO healthcare;
+GRANT USAGE, CREATE ON SCHEMA public TO healthcare;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO healthcare;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO healthcare;
+```
+
+如果提示 `role "healthcare" already exists`，说明用户已经创建过，可以继续执行后面的 `ALTER USER` 和 `GRANT` 语句。
+
+当前推荐让项目表位于默认 `public` schema，因此手动查询审计日志时直接写表名即可：
 
 ```sql
 SELECT id, action, outcome, current_hash
@@ -494,7 +565,7 @@ notepad .\backend\.env
 如果使用数据库脚本默认参数，把 `.env` 改成：
 
 ```env
-DATABASE_URL=postgresql+psycopg2://omm:OpenGauss%40123@localhost:5433/health_security
+DATABASE_URL=postgresql+psycopg2://healthcare:Healthcare%40123@localhost:5433/health_security
 JWT_SECRET=dev_secret_for_course_project
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=60
@@ -502,9 +573,15 @@ MEDICAL_RECORD_KEY=把base64密钥粘贴到这里
 TZ=Asia/Shanghai
 ```
 
-注意：数据库密码里的 `@` 在 URL 中要写成 `%40`，所以 `OpenGauss@123` 在 `DATABASE_URL` 里写成 `OpenGauss%40123`。
+注意：数据库密码里的 `@` 在 URL 中要写成 `%40`，所以 `Healthcare@123` 在 `DATABASE_URL` 里写成 `Healthcare%40123`。
 
-注意：上方DATABASE_URL,JWT_SECRET,一直到TZ 都要改为小写，否则程序无法正常运行；倘若改为小写也无法登录，请查看是否是omm权限导致的，最好新建立一个账户，并更改env。
+注意：上方 `DATABASE_URL`、`JWT_SECRET` 一直到 `TZ` 都要按 `.env.example` 中的变量名配置。不要把后端数据库用户改回 `omm`，否则可能出现：
+
+```text
+Forbid remote connection with initial user
+```
+
+出现该错误时，把 `DATABASE_URL` 改回 `healthcare` 用户，并确认已经执行过“创建后端数据库用户”的 SQL。
 
 注意：`MEDICAL_RECORD_KEY` 必须是 base64 编码后的 32 字节密钥。如果数据库里已经有加密病历，换密钥后旧病历将无法解密。
 
@@ -513,7 +590,7 @@ TZ=Asia/Shanghai
 如果你用了其他端口，例如 `15432`，则改成：
 
 ```env
-DATABASE_URL=postgresql+psycopg2://omm:OpenGauss%40123@localhost:15432/health_security
+DATABASE_URL=postgresql+psycopg2://healthcare:Healthcare%40123@localhost:15432/health_security
 ```
 
 ### 4. 安装后端依赖
@@ -715,8 +792,8 @@ password123
 | 用户名 | 角色 | 登录后页面 | 当前可演示内容 |
 |---|---|---|---|
 | `patient1` - `patient10` | `PATIENT` | `/patient` | 查看绑定到自己的加密病历 |
-| `doctor1` | `DOCTOR` | `/doctor` | 登录和页面跳转，占位页 |
-| `admin` | `ADMIN` | `/admin` | 登录和页面跳转，占位页 |
+| `doctor1` | `DOCTOR` | `/doctor` | 审核通过后可查看病人列表、搜索患者和申请授权 |
+| `admin` | `ADMIN` | `/admin` | 账号管理、医生审核、医患分配和系统安全状态 |
 | `auditor` | `AUDITOR` | `/auditor` | 查看审计统计、审计日志和哈希链验证结果 |
 
 ## 当前可演示流程
@@ -731,16 +808,25 @@ password123
 8. 进入患者 Dashboard，查看患者基础信息、诊断列表、相关就诊、检查、用药、操作记录。
 9. 查询 `medical_records.encrypted_data`，验证病历正文以密文保存。
 
+### 管理员端
+
+1. 使用 admin 登录，进入 Admin Dashboard。
+2. 在 Doctor Review 中从固定选项选择医生科室，并维护执业编号和备注。
+3. 将医生 Review 设置为 Approved，医生通过审核后才能访问医生端业务接口。
+4. 在 Patient Assignment 中选择已审核医生和患者，生成有效期 14 天的 DEFAULT_CLINICAL 默认授权。
+5. 查看系统状态和安全边界提示，确认管理员只能看统计，不能查看解密病历正文。
+
 ### 医生端
 
-1. 使用 doctor1 登录，进入医生 Dashboard，查看 “我的病人列表”（5 个分组）。
-2. 点击 “搜索患者”，输入患者名称搜索，根据患者授权状态显示智能操作按钮。
-3. 对未授权患者，提交 DEFAULT/EXTRA 类型授权申请（填写申请理由）。
-4. 申请提交后，患者端会显示待审批申请，医生端患者移至 Pending Approval 分组。
-5. 患者批准申请后，医生端患者移至对应分组（Default Access/Full Access）。
-6. 点击 “查看病历”，查看按授权范围脱敏后的患者病历内容。
-7. 患者撤销授权后，医生端患者移至 Revoked 分组，再次查看病历会被拒绝。
-8. 被拒绝的申请可重新提交，已有 Full Access 的患者不显示申请按钮，已有 Default Access 的患者只显示 Apply Full Access 按钮。
+1. 确认 doctor1 已由管理员审核通过。
+2. 使用 doctor1 登录，进入医生 Dashboard，查看 “我的病人列表”（5 个分组）。
+3. 点击 “搜索患者”，输入患者名称搜索，根据患者授权状态显示智能操作按钮。
+4. 对未授权患者，提交 DEFAULT/EXTRA 类型授权申请（填写申请理由）。
+5. 申请提交后，患者端会显示待审批申请，医生端患者移至 Pending Approval 分组。
+6. 患者批准申请后，医生端患者移至对应分组（Default Access/Full Access）。
+7. 点击 “查看病历”，查看按授权范围脱敏后的患者病历内容。
+8. 患者撤销授权后，医生端患者移至 Revoked 分组，再次查看病历会被拒绝。
+9. 被拒绝的申请可重新提交，已有 Full Access 的患者不显示申请按钮，已有 Default Access 的患者只显示 Apply Full Access 按钮。
 
 ### 患者端
 1. 使用 patient1-10 登录，进入患者 Dashboard，查看本人病历、统计数据、诊断列表。
@@ -760,11 +846,8 @@ password123
 
 ## 后续待办
 
-- 补齐管理员页面的业务功能。
 - 准备最终演示脚本和报告截图。
 
-- 成员 D：继续整理审计日志演示脚本，补充报告截图和防篡改验证截图。
-- 所有后端受保护接口都应复用 `get_current_user()` 或 `require_roles()`，不要在各模块重复实现登录认证。
 
 ## 参考文档
 

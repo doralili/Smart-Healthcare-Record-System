@@ -47,6 +47,10 @@ const revokedPatients = computed(() =>
   patients.value.filter(p => p.consent_status === 'REVOKED')
 )
 
+const expiredPatients = computed(() =>
+  patients.value.filter(p => p.consent_status === 'EXPIRED')
+)
+
 // 获取患者列表
 const loadPatients = async () => {
   try {
@@ -363,6 +367,50 @@ onMounted(() => {
             </el-table-column>
           </el-table>
         </div>
+
+        <!-- Expired 分组 -->
+        <div class="mb-6">
+          <h3 class="mb-2">
+            Expired Access
+            <el-tag type="warning" size="small">{{ expiredPatients.length }}</el-tag>
+          </h3>
+          <el-table :data="expiredPatients" border stripe>
+            <el-table-column prop="full_name" label="Patient Name" min-width="200" />
+            <el-table-column prop="gender" label="Gender" width="80" />
+            <el-table-column label="Birth Date" width="120">
+              <template #default="{ row }">
+                {{ formatDate(row.birth_date) }}
+              </template>
+            </el-table-column>
+            <el-table-column label="Scope" width="120">
+              <template #default="{ row }">
+                <el-tag type="warning" size="small">
+                  {{ getScopeText(row.scope) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="Action" min-width="280">
+              <template #default="{ row }">
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                  <el-button
+                    type="primary"
+                    size="small"
+                    @click="openApplyDialog(row, 'DEFAULT')"
+                  >
+                    Re-apply Default
+                  </el-button>
+                  <el-button
+                    type="success"
+                    size="small"
+                    @click="openApplyDialog(row, 'EXTRA')"
+                  >
+                    Re-apply Full Access
+                  </el-button>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
       </el-tab-pane>
 
       <!-- 搜索新患者 Tab -->
@@ -399,6 +447,9 @@ onMounted(() => {
               <el-tag v-else-if="row.status === 'REJECTED'" type="danger" size="small">
                 Rejected
               </el-tag>
+              <el-tag v-else-if="row.status === 'EXPIRED'" type="warning" size="small">
+                Expired
+              </el-tag>
               <el-tag v-else type="info" size="small">
                 No Access
               </el-tag>
@@ -429,6 +480,24 @@ onMounted(() => {
               
               <!-- 已拒绝：显示重新申请按钮 -->
               <div v-else-if="row.status === 'REJECTED'" style="display: flex; gap: 8px;">
+                <el-button
+                  type="primary"
+                  size="small"
+                  @click="openApplyDialog(row, 'DEFAULT')"
+                >
+                  Re-apply Default
+                </el-button>
+                <el-button
+                  type="success"
+                  size="small"
+                  @click="openApplyDialog(row, 'EXTRA')"
+                >
+                  Re-apply Full Access
+                </el-button>
+              </div>
+
+              <!-- 已过期：允许重新申请 -->
+              <div v-else-if="row.status === 'EXPIRED'" style="display: flex; gap: 8px;">
                 <el-button
                   type="primary"
                   size="small"
