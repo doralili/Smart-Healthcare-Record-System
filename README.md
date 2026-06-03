@@ -387,6 +387,36 @@ database/health_security.copy.sql
 
 这会创建新的 openGauss 容器，并把 dump 文件里的表结构和数据恢复进去，包括 `users`、`patients`、`medical_records` 等表。
 
+导入consent,access_log表：
+在PowerShell执行：
+
+```
+docker exec -it healthcare-opengauss-dev bash
+su - omm
+gsql -d health_security -f /path/to/consents_schema.sql
+gsql -d health_security -f /path/to/access_logs_schema.sql
+
+```
+
+注意：需手动插入测试数据，如：
+```
+-- 1. 已授权患者（ACTIVE）- 会显示在 Default Authorization 分组
+INSERT INTO consents (patient_id, doctor_id, record_scope, status, consent_source) VALUES
+(2, 2, 'DEFAULT', 'ACTIVE', 'SYSTEM'),
+(3, 2, 'DEFAULT', 'ACTIVE', 'SYSTEM');
+
+-- 2. 待审批患者（PENDING）- 会显示在 Pending Approval 分组
+INSERT INTO consents (patient_id, doctor_id, record_scope, status, consent_source, request_reason) VALUES
+(4, 2, 'DEFAULT', 'PENDING', 'EXPLICIT_REQUEST', 'Need to review lab results for diagnosis'),
+(5, 2, 'DEFAULT', 'PENDING', 'EXPLICIT_REQUEST', 'Requesting access for treatment plan');
+
+-- 3. 已撤销患者（REVOKED）- 会显示在 Revoked 分组
+INSERT INTO consents (patient_id, doctor_id, record_scope, status, consent_source) VALUES
+(6, 2, 'DEFAULT', 'REVOKED', 'SYSTEM');
+
+-- 验证插入结果
+SELECT id, patient_id, doctor_id, status, record_scope FROM consents WHERE doctor_id = 2;
+```
 #### 如果只是想创建干净数据库
 
 ```powershell
