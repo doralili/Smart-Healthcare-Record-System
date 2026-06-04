@@ -27,6 +27,140 @@ RESOURCE_TYPES = {
     "Procedure",
 }
 
+DEMO_PATIENT_USERNAMES = [f"patient{index}" for index in range(1, 11)]
+
+DEPARTMENT_KEYWORDS = {
+    "Internal Medicine": [
+        "a1c",
+        "anemia",
+        "asthma",
+        "atrial",
+        "blood pressure",
+        "bronchitis",
+        "cardiac",
+        "cardio",
+        "chronic",
+        "copd",
+        "coronary",
+        "diabetes",
+        "diabetic",
+        "digestive",
+        "disorder",
+        "dyspnea",
+        "emphysema",
+        "endocrine",
+        "fever",
+        "glucose",
+        "hba1c",
+        "heart",
+        "hemoglobin a1c",
+        "hyperglycemia",
+        "hypertension",
+        "hypoglycemia",
+        "infection",
+        "influenza",
+        "insulin",
+        "kidney",
+        "liver",
+        "metformin",
+        "myocardial",
+        "pneumonia",
+        "prediabetes",
+        "pulmonary",
+        "renal",
+        "respiratory",
+        "sepsis",
+        "stroke",
+    ],
+    "Surgery": [
+        "amputation",
+        "appendectomy",
+        "arthroscopy",
+        "biopsy",
+        "burn",
+        "contusion",
+        "dislocation",
+        "fracture",
+        "injury",
+        "laceration",
+        "operation",
+        "operative",
+        "orthopedic",
+        "procedure",
+        "repair",
+        "replacement",
+        "sprain",
+        "surgery",
+        "surgical",
+        "trauma",
+        "wound",
+    ],
+    "Obstetrics and Gynecology": [
+        "abortion",
+        "antenatal",
+        "birth",
+        "contraceptive",
+        "delivery",
+        "female infertility",
+        "gynecologic",
+        "labor",
+        "maternal",
+        "obstetric",
+        "postnatal",
+        "postpartum",
+        "pregnancy",
+        "prenatal",
+        "uterine",
+        "vaginal",
+    ],
+    "Pediatrics": [
+        "birth weight",
+        "child",
+        "childhood",
+        "infant",
+        "newborn",
+        "pediatric",
+        "well child",
+    ],
+    "Dentistry": [
+        "dental",
+        "dentist",
+        "fractured dental",
+        "gingival",
+        "gingivitis",
+        "oral",
+        "tooth",
+    ],
+    "Mental Health": [
+        "abuse",
+        "anxiety",
+        "depression",
+        "mental",
+        "panic",
+        "post traumatic",
+        "ptsd",
+        "social isolation",
+        "stress",
+        "substance",
+    ],
+    "Rehabilitation and Preventive Care": [
+        "body mass index",
+        "bmi",
+        "diet",
+        "education",
+        "employment",
+        "exercise",
+        "housing",
+        "lifestyle",
+        "medication review",
+        "obesity",
+        "preventive",
+        "screening",
+        "social contact",
+        "transportation",
+    ],
+}
+
 
 def load_fhir_bundle(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as file:
@@ -148,12 +282,31 @@ def parse_encounter(resource: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def classify_department_for_text(*values: Any) -> str | None:
+    text = " ".join(str(value) for value in values if value).lower()
+    if not text:
+        return "General Medicine"
+
+    scores = {
+        department: sum(1 for keyword in keywords if keyword in text)
+        for department, keywords in DEPARTMENT_KEYWORDS.items()
+    }
+    best_department, best_score = max(scores.items(), key=lambda item: item[1])
+
+    if best_score == 0:
+        return "General Medicine"
+
+    return best_department
+
+
 def parse_condition(resource: dict[str, Any]) -> dict[str, Any]:
+    code = get_display_text(resource.get("code"))
     return {
         "id": resource.get("id"),
         "encounter_id": get_reference_id(resource.get("encounter")),
         "clinical_status": get_display_text(resource.get("clinicalStatus")),
-        "code": get_display_text(resource.get("code")),
+        "code": code,
+        "department": classify_department_for_text(code),
         "recorded_date": resource.get("recordedDate"),
     }
 
@@ -183,12 +336,14 @@ def parse_observation(resource: dict[str, Any]) -> dict[str, Any]:
                 parts.append(f"{label}: {number} {unit}".strip())
         value = "; ".join(parts) if parts else None
 
+    code = get_display_text(resource.get("code"))
     return {
         "id": resource.get("id"),
         "encounter_id": get_reference_id(resource.get("encounter")),
         "status": resource.get("status"),
-        "code": get_display_text(resource.get("code")),
+        "code": code,
         "value": value,
+        "department": classify_department_for_text(code, value),
         "effective_datetime": resource.get("effectiveDateTime"),
     }
 
@@ -196,12 +351,14 @@ def parse_observation(resource: dict[str, Any]) -> dict[str, Any]:
 def parse_medication_request(resource: dict[str, Any]) -> dict[str, Any]:
     medication = resource.get("medicationCodeableConcept")
 
+    medication_text = get_display_text(medication)
     return {
         "id": resource.get("id"),
         "encounter_id": get_reference_id(resource.get("encounter")),
         "status": resource.get("status"),
         "intent": resource.get("intent"),
-        "medication": get_display_text(medication),
+        "medication": medication_text,
+        "department": classify_department_for_text(medication_text),
         "authored_on": resource.get("authoredOn"),
     }
 
@@ -211,11 +368,13 @@ def parse_procedure(resource: dict[str, Any]) -> dict[str, Any]:
     if performed is None:
         performed = (resource.get("performedPeriod") or {}).get("start")
 
+    code = get_display_text(resource.get("code"))
     return {
         "id": resource.get("id"),
         "encounter_id": get_reference_id(resource.get("encounter")),
         "status": resource.get("status"),
-        "code": get_display_text(resource.get("code")),
+        "code": code,
+        "department": classify_department_for_text(code),
         "performed_datetime": performed,
     }
 
@@ -246,10 +405,9 @@ def build_record(resources: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
 
 
 def get_available_patient_demo_users(db) -> list[User]:
-    usernames = [f"patient{index}" for index in range(1, 11)]
     users = (
         db.query(User)
-        .filter(User.username.in_(usernames))
+        .filter(User.username.in_(DEMO_PATIENT_USERNAMES))
         .filter(User.role == "PATIENT")
         .all()
     )
@@ -267,7 +425,7 @@ def get_available_patient_demo_users(db) -> list[User]:
 
     return [
         users_by_name[username]
-        for username in usernames
+        for username in DEMO_PATIENT_USERNAMES
         if username in users_by_name and users_by_name[username].id not in bound_user_ids
     ]
 
@@ -285,13 +443,53 @@ def import_patient_bundle(
     )
 
     if existing_patient is not None:
+        existing_record = (
+            db.query(MedicalRecord)
+            .filter(MedicalRecord.patient_id == existing_patient.id)
+            .first()
+        )
+
         if existing_patient.user_id is None and bind_user_id is not None:
             existing_patient.user_id = bind_user_id
             print(f"Bound existing patient: {patient_data['full_name']}")
+
+            if existing_record is None:
+                encrypted_data, nonce = encrypt_record_json(record_data)
+                db.add(
+                    MedicalRecord(
+                        patient_id=existing_patient.id,
+                        source="SYNTHEA",
+                        record_type="FHIR_SUMMARY",
+                        encrypted_data=encrypted_data,
+                        nonce=nonce,
+                        created_at=now_beijing(),
+                    )
+                )
+                print(f"Added missing record for existing patient: {patient_data['full_name']}")
+
             return "bound_existing", True
 
-        print(f"Skip existing patient: {patient_data['full_name']}")
-        return "skipped_existing", False
+        if existing_record is None:
+            encrypted_data, nonce = encrypt_record_json(record_data)
+            db.add(
+                MedicalRecord(
+                    patient_id=existing_patient.id,
+                    source="SYNTHEA",
+                    record_type="FHIR_SUMMARY",
+                    encrypted_data=encrypted_data,
+                    nonce=nonce,
+                    created_at=now_beijing(),
+                )
+            )
+            print(f"Added missing record for existing patient: {patient_data['full_name']}")
+            return "record_added_existing", False
+
+        encrypted_data, nonce = encrypt_record_json(record_data)
+        existing_record.encrypted_data = encrypted_data
+        existing_record.nonce = nonce
+
+        print(f"Updated existing record: {patient_data['full_name']}")
+        return "record_updated_existing", False
 
     encrypted_data, nonce = encrypt_record_json(record_data)
     now = now_beijing()
@@ -350,6 +548,8 @@ def main():
         next_demo_user_index = 0
         imported_count = 0
         bound_existing_count = 0
+        record_added_existing_count = 0
+        record_updated_existing_count = 0
         skipped_existing_count = 0
         skipped_deceased_count = 0
 
@@ -390,6 +590,10 @@ def main():
                 imported_count += 1
             elif status == "bound_existing":
                 bound_existing_count += 1
+            elif status == "record_added_existing":
+                record_added_existing_count += 1
+            elif status == "record_updated_existing":
+                record_updated_existing_count += 1
             elif status == "skipped_existing":
                 skipped_existing_count += 1
 
@@ -398,6 +602,8 @@ def main():
         print("\nImport finished.")
         print(f"Imported living patients: {imported_count}")
         print(f"Bound existing patients: {bound_existing_count}")
+        print(f"Added missing records for existing patients: {record_added_existing_count}")
+        print(f"Updated existing records: {record_updated_existing_count}")
         print(f"Skipped existing patients: {skipped_existing_count}")
         print(f"Skipped deceased patients: {skipped_deceased_count}")
 

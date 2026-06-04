@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 
 import {
   getMyRecordDetail,
@@ -10,6 +9,7 @@ import {
 } from "../api/patientRecords";
 import DashboardLayout from "../layouts/DashboardLayout.vue";
 import { useAuthStore } from "../stores/auth";
+import { ElMessage } from "../utils/message";
 
 // 新增：授权管理相关的 API 和类型
 import { 
@@ -18,13 +18,17 @@ import {
   rejectConsent,
   getMyDoctors,
   revokeConsent,
+  getAvailableDoctors,
+  selectDefaultDoctor,
   type PendingConsent,
-  type AuthorizedDoctor
+  type AuthorizedDoctor,
+  type AvailableDoctor
 } from "../api/patientAuth";
 
 interface DiagnosisRow {
   index: number;
   diagnosis: string;
+  department: string;
   status: string;
   date: string;
   rawDate: unknown;
@@ -45,6 +49,7 @@ interface TimelineRow {
   encounterId: string | null;
   value?: string;
   type?: string;
+  department?: string;
 }
 
 interface ObservationGroupRow {
@@ -64,6 +69,8 @@ const loading = ref(false);
 const records = ref<PatientRecordSummary[]>([]);
 const selectedRecord = ref<PatientRecordDetail | null>(null);
 const diagnosisDateQuery = ref("");
+const diagnosisDepartmentQuery = ref("");
+const unlinkedDepartmentQuery = ref("");
 const selectedDiagnosis = ref<DiagnosisRow | null>(null);
 const diagnosisDrawerVisible = ref(false);
 const selectedUnlinkedClinicalGroup = ref<ObservationGroupRow | null>(null);
@@ -73,7 +80,11 @@ const unlinkedClinicalDrawerVisible = ref(false);
 const activeTab = ref('records')
 const pendingConsents = ref<PendingConsent[]>([])
 const authorizedDoctors = ref<AuthorizedDoctor[]>([])
+const availableDoctors = ref<AvailableDoctor[]>([])
+const availableDoctorDepartmentQuery = ref('')
 const loadingAuth = ref(false)
+const selectingDoctorId = ref<number | null>(null)
+let pendingConsentsRefreshTimer: number | undefined;
 
 const record = computed(() => selectedRecord.value?.record);
 const patient = computed(() => selectedRecord.value?.patient);
@@ -111,6 +122,7 @@ const diagnosisRows = computed<DiagnosisRow[]>(() => {
     const dateKey = formatDateKey(rawDate);
     const groupKey = encounterId ? `encounter:${encounterId}` : `date:${dateKey || index}`;
     const diagnosis = cleanMedicalText(condition.code);
+    const department = formatDepartment(condition.department);
     const status = formatStatus(condition.clinical_status);
 
     const existing = grouped.get(groupKey);
@@ -118,6 +130,7 @@ const diagnosisRows = computed<DiagnosisRow[]>(() => {
     if (existing) {
       existing.raw.push(condition);
       existing.diagnosis = joinUniqueText(existing.diagnosis, diagnosis);
+      existing.department = joinUniqueText(existing.department, department);
       existing.status = joinUniqueText(existing.status, status);
       return;
     }
@@ -125,6 +138,7 @@ const diagnosisRows = computed<DiagnosisRow[]>(() => {
     grouped.set(groupKey, {
       index,
       diagnosis,
+      department,
       status,
       date: formatDateTime(rawDate),
       rawDate,
@@ -140,8 +154,9 @@ const diagnosisRows = computed<DiagnosisRow[]>(() => {
 
 const filteredDiagnosisRows = computed(() => {
   const query = normalizeSearchText(diagnosisDateQuery.value);
+  const departmentQuery = normalizeSearchText(diagnosisDepartmentQuery.value);
 
-  if (!query) {
+  if (!query && !departmentQuery) {
     return diagnosisRows.value;
   }
 
@@ -149,6 +164,7 @@ const filteredDiagnosisRows = computed(() => {
     const searchable = normalizeSearchText(
       [
         item.diagnosis,
+        item.department,
         item.status,
         item.date,
         item.rawDate,
@@ -156,7 +172,11 @@ const filteredDiagnosisRows = computed(() => {
       ].join(" "),
     );
 
-    return searchable.includes(query);
+    const department = normalizeSearchText(item.department);
+    const matchesKeyword = !query || searchable.includes(query);
+    const matchesDepartment = !departmentQuery || department.includes(departmentQuery);
+
+    return matchesKeyword && matchesDepartment;
   });
 });
 
@@ -187,6 +207,17 @@ const selectedUnlinkedMedicationRows = computed(() =>
 const selectedUnlinkedProcedureRows = computed(() =>
   selectedUnlinkedClinicalGroup.value?.rows.filter((row) => row.category === "Procedure") ?? [],
 );
+
+const filteredAvailableDoctors = computed(() => {
+  const query = availableDoctorDepartmentQuery.value.trim().toLowerCase();
+  if (!query) {
+    return availableDoctors.value;
+  }
+
+  return availableDoctors.value.filter((doctor) =>
+    (doctor.department || '').toLowerCase().includes(query),
+  );
+});
 
 const unlinkedClinicalRows = computed(() => {
   if (!record.value) {
@@ -281,6 +312,18 @@ const unlinkedClinicalGroups = computed<ObservationGroupRow[]>(() => {
   return groups;
 });
 
+const filteredUnlinkedClinicalGroups = computed<ObservationGroupRow[]>(() => {
+  const departmentQuery = normalizeSearchText(unlinkedDepartmentQuery.value);
+
+  if (!departmentQuery) {
+    return unlinkedClinicalGroups.value;
+  }
+
+  return unlinkedClinicalGroups.value
+    .map((group) => filterClinicalGroupByDepartment(group, departmentQuery))
+    .filter((group): group is ObservationGroupRow => Boolean(group));
+});
+
 watch(filteredDiagnosisRows, (rows) => {
   if (!selectedDiagnosis.value) {
     return;
@@ -291,6 +334,21 @@ watch(filteredDiagnosisRows, (rows) => {
     diagnosisDrawerVisible.value = false;
     selectedDiagnosis.value = null;
   }
+});
+
+watch(filteredUnlinkedClinicalGroups, (groups) => {
+  if (!selectedUnlinkedClinicalGroup.value) {
+    return;
+  }
+
+  const nextGroup = findClinicalGroupByKey(groups, selectedUnlinkedClinicalGroup.value.key);
+  if (!nextGroup) {
+    unlinkedClinicalDrawerVisible.value = false;
+    selectedUnlinkedClinicalGroup.value = null;
+    return;
+  }
+
+  selectedUnlinkedClinicalGroup.value = nextGroup;
 });
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -328,6 +386,14 @@ function formatValue(value: unknown) {
 
   if (typeof value === "boolean") {
     return value ? "Yes" : "No";
+  }
+
+  return String(value);
+}
+
+function formatDepartment(value: unknown) {
+  if (!value) {
+    return "Not classified";
   }
 
   return String(value);
@@ -522,6 +588,47 @@ function flattenClinicalRows(groups: ObservationGroupRow[]) {
   return groups.flatMap((group) => group.rows);
 }
 
+function filterClinicalGroupByDepartment(
+  group: ObservationGroupRow,
+  departmentQuery: string,
+): ObservationGroupRow | null {
+  const children = group.children
+    ?.map((child) => filterClinicalGroupByDepartment(child, departmentQuery))
+    .filter((child): child is ObservationGroupRow => Boolean(child));
+  const childRows = children ? flattenClinicalRows(children) : [];
+  const ownRows = group.rows.filter((row) =>
+    normalizeSearchText(row.department).includes(departmentQuery),
+  );
+  const rows = dedupeRelatedRows([...childRows, ...ownRows]).sort(compareTimelineRows);
+
+  if (!rows.length) {
+    return null;
+  }
+
+  return buildClinicalGroup({
+    key: group.key,
+    period: group.period,
+    level: group.level,
+    rows,
+    children,
+  });
+}
+
+function findClinicalGroupByKey(groups: ObservationGroupRow[], key: string): ObservationGroupRow | null {
+  for (const group of groups) {
+    if (group.key === key) {
+      return group;
+    }
+
+    const childMatch = group.children ? findClinicalGroupByKey(group.children, key) : null;
+    if (childMatch) {
+      return childMatch;
+    }
+  }
+
+  return null;
+}
+
 function getClinicalTypes(rows: TimelineRow[]) {
   return Array.from(new Set(rows.map((row) => row.category))).join(", ");
 }
@@ -537,6 +644,7 @@ function buildClinicalRow(
 ): TimelineRow {
   if (category === "medications") {
     const name = cleanMedicalText(source.medication);
+    const department = formatDepartment(source.department);
     const status = formatStatus(source.status);
     const date = formatDateTime(source.authored_on);
 
@@ -544,6 +652,7 @@ function buildClinicalRow(
       key: buildRelatedRowKey(category, source, [name, status, date]),
       category: "Medication",
       name,
+      department,
       status,
       date,
       rawDate: source.authored_on,
@@ -555,6 +664,7 @@ function buildClinicalRow(
   if (category === "observations") {
     const name = cleanMedicalText(source.code);
     const value = formatValue(source.value);
+    const department = formatDepartment(source.department);
     const status = formatStatus(source.status);
     const date = formatDateTime(source.effective_datetime);
 
@@ -563,6 +673,7 @@ function buildClinicalRow(
       category: "Lab / Vital",
       name,
       value,
+      department,
       status,
       date,
       rawDate: source.effective_datetime,
@@ -572,6 +683,7 @@ function buildClinicalRow(
   }
 
   const name = cleanMedicalText(source.code);
+  const department = formatDepartment(source.department);
   const status = formatStatus(source.status);
   const date = formatDateTime(source.performed_datetime);
 
@@ -579,6 +691,7 @@ function buildClinicalRow(
     key: buildRelatedRowKey(category, source, [name, status, date]),
     category: "Procedure",
     name,
+    department,
     status,
     date,
     rawDate: source.performed_datetime,
@@ -620,6 +733,7 @@ function buildRelatedRows(
 
       if (category === "medications") {
         const name = cleanMedicalText(source.medication);
+        const department = formatDepartment(source.department);
         const status = formatStatus(source.status);
         const date = formatDateTime(source.authored_on);
 
@@ -627,6 +741,7 @@ function buildRelatedRows(
           key: buildRelatedRowKey(category, source, [name, status, date]),
           category: "Medication",
           name,
+          department,
           status,
           date,
           rawDate: source.authored_on,
@@ -638,6 +753,7 @@ function buildRelatedRows(
       if (category === "observations") {
         const name = cleanMedicalText(source.code);
         const value = formatValue(source.value);
+        const department = formatDepartment(source.department);
         const status = formatStatus(source.status);
         const date = formatDateTime(source.effective_datetime);
 
@@ -646,6 +762,7 @@ function buildRelatedRows(
           category: "Lab / Vital",
           name,
           value,
+          department,
           status,
           date,
           rawDate: source.effective_datetime,
@@ -655,6 +772,7 @@ function buildRelatedRows(
       }
 
       const name = cleanMedicalText(source.code);
+      const department = formatDepartment(source.department);
       const status = formatStatus(source.status);
       const date = formatDateTime(source.performed_datetime);
 
@@ -662,6 +780,7 @@ function buildRelatedRows(
         key: buildRelatedRowKey(category, source, [name, status, date]),
         category: "Procedure",
         name,
+        department,
         status,
         date,
         rawDate: source.performed_datetime,
@@ -737,9 +856,11 @@ async function loadRecords() {
 }
 
 // 新增：加载待审批申请
-async function loadPendingConsents() {
+async function loadPendingConsents(silent = false) {
   if (!auth.token) return;
-  loadingAuth.value = true;
+  if (!silent) {
+    loadingAuth.value = true;
+  }
   try {
     const res = await getPendingConsents(auth.token);
     // 修复：res 已经是 response.data，直接取 pending_consents
@@ -747,9 +868,13 @@ async function loadPendingConsents() {
     console.log('Pending consents loaded:', pendingConsents.value);
   } catch (err) {
     console.error('Failed to load pending requests:', err);
-    ElMessage.error("Failed to load pending requests");
+    if (!silent) {
+      ElMessage.error("Failed to load pending requests");
+    }
   } finally {
-    loadingAuth.value = false;
+    if (!silent) {
+      loadingAuth.value = false;
+    }
   }
 }
 
@@ -770,6 +895,27 @@ async function loadMyDoctors() {
   }
 }
 
+// 鏂板锛氬姞杞藉彲閫夊尰鐢?
+async function loadAvailableDoctors(silent = false) {
+  if (!auth.token) return;
+  if (!silent) {
+    loadingAuth.value = true;
+  }
+  try {
+    const res = await getAvailableDoctors(auth.token, availableDoctorDepartmentQuery.value);
+    availableDoctors.value = res.doctors || [];
+  } catch (err) {
+    console.error('Failed to load available doctors:', err);
+    if (!silent) {
+      ElMessage.error("Failed to load available doctors");
+    }
+  } finally {
+    if (!silent) {
+      loadingAuth.value = false;
+    }
+  }
+}
+
 // 新增：批准申请
 async function handleApprove(consentId: number) {
   try {
@@ -777,6 +923,7 @@ async function handleApprove(consentId: number) {
     ElMessage.success("Access granted to doctor");
     await loadPendingConsents();
     await loadMyDoctors();
+    await loadAvailableDoctors(true);
   } catch (err) {
     console.error('Failed to approve request:', err);
     ElMessage.error("Failed to approve request");
@@ -802,17 +949,47 @@ async function handleRevoke(consentId: number, doctorName: string) {
     ElMessage.success(`Revoked access for Dr. ${doctorName}`);
     await loadMyDoctors();
     await loadPendingConsents();
+    await loadAvailableDoctors(true);
   } catch (err) {
     console.error('Failed to revoke access:', err);
     ElMessage.error("Failed to revoke access");
   }
 }
 
+// 鏂板锛氭偅鑰呴€夋嫨榛樿鍖荤敓
+async function handleSelectDoctor(doctor: AvailableDoctor) {
+  if (!auth.token) return;
+  selectingDoctorId.value = doctor.doctor_user_id;
+  try {
+    await selectDefaultDoctor(auth.token, doctor.doctor_user_id);
+    ElMessage.success(`Default access granted to ${doctor.name || doctor.username}`);
+    await Promise.all([
+      loadAvailableDoctors(true),
+      loadMyDoctors(),
+      loadPendingConsents(true),
+    ]);
+  } catch (err: any) {
+    console.error('Failed to select doctor:', err);
+    ElMessage.error(err?.response?.data?.detail || "Failed to select doctor");
+  } finally {
+    selectingDoctorId.value = null;
+  }
+}
+
 // 新增：切换 Tab 时加载数据
 async function onTabChange(tab: any) {
   if (tab === 'auth') {
-    await Promise.all([loadPendingConsents(), loadMyDoctors()]);
+    await Promise.all([loadPendingConsents(), loadMyDoctors(), loadAvailableDoctors()]);
   }
+}
+
+async function handleDepartmentSearch() {
+  await loadAvailableDoctors();
+}
+
+async function handleClearDepartmentSearch() {
+  availableDoctorDepartmentQuery.value = '';
+  await loadAvailableDoctors();
 }
 
 async function handleTabClick(tab: any) {
@@ -823,6 +1000,16 @@ onMounted(() => {
   loadRecords();
   loadPendingConsents();
   loadMyDoctors();
+  loadAvailableDoctors(true);
+  pendingConsentsRefreshTimer = window.setInterval(() => {
+    loadPendingConsents(true);
+  }, 10000);
+});
+
+onUnmounted(() => {
+  if (pendingConsentsRefreshTimer !== undefined) {
+    window.clearInterval(pendingConsentsRefreshTimer);
+  }
 });
 </script>
 
@@ -906,20 +1093,29 @@ onMounted(() => {
               <template #header>
                 <div class="section-header">
                   <span>Diagnoses</span>
-                  <el-input
-                    v-model="diagnosisDateQuery"
-                    clearable
-                    class="date-filter"
-                    placeholder="Search by date, e.g. 2024, 2024-05, 2024-05-20"
-                  />
+                  <div class="record-filters">
+                    <el-input
+                      v-model="diagnosisDateQuery"
+                      clearable
+                      class="record-filter"
+                      placeholder="Search by date, e.g. 2024, 2024-05, 2024-05-20"
+                    />
+                    <el-input
+                      v-model="diagnosisDepartmentQuery"
+                      clearable
+                      class="department-filter"
+                      placeholder="Search by department"
+                    />
+                  </div>
                 </div>
               </template>
 
               <el-table
                 :data="filteredDiagnosisRows"
                 border
-                empty-text="No diagnoses match this time."
+                empty-text="No diagnoses match these filters."
               >
+                <el-table-column prop="department" label="Department" min-width="170" />
                 <el-table-column prop="diagnosis" label="Diagnosis" min-width="260" />
                 <el-table-column prop="status" label="Status" width="160" />
                 <el-table-column prop="date" label="Date" width="190" />
@@ -935,14 +1131,22 @@ onMounted(() => {
 
             <el-card class="section-card" shadow="never">
               <template #header>
-                <span>Unlinked Clinical Records</span>
+                <div class="section-header">
+                  <span>Unlinked Clinical Records</span>
+                  <el-input
+                    v-model="unlinkedDepartmentQuery"
+                    clearable
+                    class="department-filter"
+                    placeholder="Search by department"
+                  />
+                </div>
               </template>
 
               <el-table
-                :data="unlinkedClinicalGroups"
+                :data="filteredUnlinkedClinicalGroups"
                 border
                 row-key="key"
-                empty-text="All lab results, medications, and procedures are linked to a diagnosis or visit."
+                empty-text="No unlinked clinical records match these filters."
               >
                 <el-table-column prop="period" label="Period" min-width="220" />
                 <el-table-column prop="level" label="Level" min-width="120" />
@@ -969,6 +1173,9 @@ onMounted(() => {
                   <el-descriptions :column="2" border>
                     <el-descriptions-item label="Diagnosis">
                       {{ selectedDiagnosis.diagnosis }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="Department">
+                      {{ selectedDiagnosis.department }}
                     </el-descriptions-item>
                     <el-descriptions-item label="Status">
                       {{ selectedDiagnosis.status }}
@@ -1003,6 +1210,7 @@ onMounted(() => {
                     border
                     empty-text="No medication found near this diagnosis date."
                   >
+                    <el-table-column prop="department" label="Department" width="170" />
                     <el-table-column prop="name" label="Medication" min-width="280" />
                     <el-table-column prop="status" label="Status" width="140" />
                     <el-table-column prop="date" label="Prescribed At" width="190" />
@@ -1016,6 +1224,7 @@ onMounted(() => {
                     border
                     empty-text="No lab or vital result found near this diagnosis date."
                   >
+                    <el-table-column prop="department" label="Department" width="170" />
                     <el-table-column prop="name" label="Item" min-width="240" />
                     <el-table-column prop="value" label="Result" min-width="180" />
                     <el-table-column prop="status" label="Status" width="140" />
@@ -1030,6 +1239,7 @@ onMounted(() => {
                     border
                     empty-text="No procedure found near this diagnosis date."
                   >
+                    <el-table-column prop="department" label="Department" width="170" />
                     <el-table-column prop="name" label="Procedure" min-width="280" />
                     <el-table-column prop="status" label="Status" width="140" />
                     <el-table-column prop="date" label="Date" width="190" />
@@ -1051,6 +1261,7 @@ onMounted(() => {
                     border
                     empty-text="No unlinked lab or vital results in this period."
                   >
+                    <el-table-column prop="department" label="Department" width="170" />
                     <el-table-column prop="name" label="Item" min-width="260" />
                     <el-table-column prop="value" label="Result" min-width="180" />
                     <el-table-column prop="status" label="Status" width="140" />
@@ -1065,6 +1276,7 @@ onMounted(() => {
                     border
                     empty-text="No unlinked medications in this period."
                   >
+                    <el-table-column prop="department" label="Department" width="170" />
                     <el-table-column prop="name" label="Medication" min-width="280" />
                     <el-table-column prop="status" label="Status" width="140" />
                     <el-table-column prop="date" label="Prescribed At" width="190" />
@@ -1078,6 +1290,7 @@ onMounted(() => {
                     border
                     empty-text="No unlinked procedures in this period."
                   >
+                    <el-table-column prop="department" label="Department" width="170" />
                     <el-table-column prop="name" label="Procedure" min-width="280" />
                     <el-table-column prop="status" label="Status" width="140" />
                     <el-table-column prop="date" label="Date" width="190" />
@@ -1090,8 +1303,84 @@ onMounted(() => {
       </el-tab-pane>
 
       <!-- 医生授权管理 Tab -->
-      <el-tab-pane label="Doctor Authorization" name="auth">
+      <el-tab-pane name="auth">
+        <template #label>
+          <el-badge
+            :hidden="pendingConsents.length === 0"
+            is-dot
+            class="auth-tab-badge"
+          >
+            <span>Doctor Authorization</span>
+          </el-badge>
+        </template>
         <section v-loading="loadingAuth" class="auth-page">
+          <el-card class="auth-card" shadow="never">
+            <template #header>
+              <div class="section-header auth-section-header">
+                <span>Choose Default Doctor</span>
+                <div class="doctor-search-bar">
+                  <el-input
+                    v-model="availableDoctorDepartmentQuery"
+                    clearable
+                    placeholder="Search by department"
+                    class="doctor-search-input"
+                    @keyup.enter="handleDepartmentSearch"
+                    @clear="handleClearDepartmentSearch"
+                  />
+                  <el-button type="primary" @click="handleDepartmentSearch">
+                    Search
+                  </el-button>
+                </div>
+              </div>
+            </template>
+
+            <el-table :data="filteredAvailableDoctors" border empty-text="No approved doctors available">
+              <el-table-column prop="name" label="Doctor" min-width="180">
+                <template #default="{ row }">
+                  {{ row.name || row.username }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="department" label="Department" min-width="170">
+                <template #default="{ row }">
+                  <span>{{ row.department || "Not recorded" }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="license_no" label="License" width="150">
+                <template #default="{ row }">
+                  {{ row.license_no || "Not recorded" }}
+                </template>
+              </el-table-column>
+              <el-table-column label="Default Access" width="150">
+                <template #default="{ row }">
+                  <el-tag
+                    :type="row.default_consent_status === 'ACTIVE' ? 'success' : row.default_consent_status === 'NONE' ? 'info' : 'warning'"
+                    size="small"
+                  >
+                    {{ row.default_consent_status }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="Expires At" width="180">
+                <template #default="{ row }">
+                  {{ row.default_consent_end_time ? formatDateTime(row.default_consent_end_time) : "Not selected" }}
+                </template>
+              </el-table-column>
+              <el-table-column label="Action" width="150">
+                <template #default="{ row }">
+                  <el-button
+                    type="primary"
+                    size="small"
+                    :disabled="row.default_consent_status === 'ACTIVE'"
+                    :loading="selectingDoctorId === row.doctor_user_id"
+                    @click="handleSelectDoctor(row)"
+                  >
+                    {{ row.default_consent_status === 'ACTIVE' ? 'Selected' : 'Choose' }}
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-card>
+
           <!-- 待审批申请 -->
           <el-card class="auth-card" shadow="never">
             <template #header>
@@ -1175,6 +1464,36 @@ onMounted(() => {
   border-radius: 8px;
 }
 
+.auth-tab-badge {
+  line-height: 1;
+}
+
+.auth-section-header {
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.doctor-search-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.doctor-search-input {
+  width: 280px;
+}
+
+.match-tag {
+  margin-left: 8px;
+}
+
+:deep(.auth-tab-badge .el-badge__content.is-dot) {
+  right: -4px;
+  top: 2px;
+}
+
 .overview-panel {
   display: flex;
   align-items: center;
@@ -1251,8 +1570,19 @@ h3 {
   gap: 16px;
 }
 
-.date-filter {
+.record-filters {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  width: min(680px, 100%);
+}
+
+.record-filter {
   width: min(420px, 100%);
+}
+
+.department-filter {
+  width: min(240px, 100%);
 }
 
 .drawer-section + .drawer-section {
@@ -1276,6 +1606,12 @@ h3 {
   .section-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .record-filters,
+  .record-filter,
+  .department-filter {
+    width: 100%;
   }
 
   .stats-grid {

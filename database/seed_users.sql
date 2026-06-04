@@ -43,6 +43,34 @@ SELECT 'doctor1', '$2b$12$kR6LqRD9qZIsfwjY3.uQM.1qEvYejZYrNE7x2A1YIiVQrzur3KT9C'
 WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = 'doctor1');
 
 INSERT INTO users (username, password_hash, role, status)
+SELECT 'doctor2', '$2b$12$kR6LqRD9qZIsfwjY3.uQM.1qEvYejZYrNE7x2A1YIiVQrzur3KT9C', 'DOCTOR', 'ACTIVE'
+WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = 'doctor2');
+
+INSERT INTO users (username, password_hash, role, status)
+SELECT 'doctor3', '$2b$12$kR6LqRD9qZIsfwjY3.uQM.1qEvYejZYrNE7x2A1YIiVQrzur3KT9C', 'DOCTOR', 'ACTIVE'
+WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = 'doctor3');
+
+INSERT INTO users (username, password_hash, role, status)
+SELECT 'doctor4', '$2b$12$kR6LqRD9qZIsfwjY3.uQM.1qEvYejZYrNE7x2A1YIiVQrzur3KT9C', 'DOCTOR', 'ACTIVE'
+WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = 'doctor4');
+
+INSERT INTO users (username, password_hash, role, status)
+SELECT 'doctor5', '$2b$12$kR6LqRD9qZIsfwjY3.uQM.1qEvYejZYrNE7x2A1YIiVQrzur3KT9C', 'DOCTOR', 'ACTIVE'
+WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = 'doctor5');
+
+INSERT INTO users (username, password_hash, role, status)
+SELECT 'doctor6', '$2b$12$kR6LqRD9qZIsfwjY3.uQM.1qEvYejZYrNE7x2A1YIiVQrzur3KT9C', 'DOCTOR', 'ACTIVE'
+WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = 'doctor6');
+
+INSERT INTO users (username, password_hash, role, status)
+SELECT 'doctor7', '$2b$12$kR6LqRD9qZIsfwjY3.uQM.1qEvYejZYrNE7x2A1YIiVQrzur3KT9C', 'DOCTOR', 'ACTIVE'
+WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = 'doctor7');
+
+INSERT INTO users (username, password_hash, role, status)
+SELECT 'doctor8', '$2b$12$kR6LqRD9qZIsfwjY3.uQM.1qEvYejZYrNE7x2A1YIiVQrzur3KT9C', 'DOCTOR', 'ACTIVE'
+WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = 'doctor8');
+
+INSERT INTO users (username, password_hash, role, status)
 SELECT 'admin', '$2b$12$.aG2Y5EkdL2e2Yb3.QT3oOs5BMVviJEuZyxWLXi8yQEvvqsV4bcPi', 'ADMIN', 'ACTIVE'
 WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = 'admin');
 

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.core.deps import get_db, get_current_user, require_roles
-from app.core.timezone import now_beijing
+from app.core.timezone import BEIJING_TZ, now_beijing
 from app.models.user import User
 from app.models.doctor import Doctor
 from app.models.consent import Consent
@@ -23,10 +23,16 @@ def ensure_doctor_approved(db: Session, user: User) -> None:
 
 
 def consent_display_status(consent: Consent) -> str:
+    end_time = consent.end_time
+    if end_time is not None and end_time.tzinfo is None:
+        end_time = end_time.replace(tzinfo=BEIJING_TZ)
+    elif end_time is not None:
+        end_time = end_time.astimezone(BEIJING_TZ)
+
     if (
         consent.status == "ACTIVE"
-        and consent.end_time is not None
-        and consent.end_time <= now_beijing()
+        and end_time is not None
+        and end_time <= now_beijing()
     ):
         return "EXPIRED"
     return consent.status
@@ -229,6 +235,7 @@ def get_patient_mask_record(
     for cond in conditions:
         diagnoses_list.append({
             "name": cond.get("code", ""),
+            "department": cond.get("department", "General Medicine"),
             "status": cond.get("clinical_status", "active"),
             "date": cond.get("recorded_date", "")[:10] if cond.get("recorded_date") else ""
         })
@@ -238,8 +245,9 @@ def get_patient_mask_record(
     medications_list = []
     for med in medications:
         medications_list.append({
-            "name": med.get("code", ""),
-            "start_date": med.get("start_date", "")[:10] if med.get("start_date") else "",
+            "name": med.get("medication", ""),
+            "department": med.get("department", "General Medicine"),
+            "start_date": med.get("authored_on", "")[:10] if med.get("authored_on") else "",
             "stop_date": med.get("stop_date", "")[:10] if med.get("stop_date") else ""
         })
     
@@ -250,7 +258,8 @@ def get_patient_mask_record(
         observations_list.append({
             "test_name": obs.get("code", ""),
             "value": obs.get("value", ""),
-            "date": obs.get("recorded_date", "")[:10] if obs.get("recorded_date") else ""
+            "department": obs.get("department", "General Medicine"),
+            "date": obs.get("effective_datetime", "")[:10] if obs.get("effective_datetime") else ""
         })
     
     # 10. 提取手术/操作
@@ -259,7 +268,8 @@ def get_patient_mask_record(
     for proc in procedures:
         procedures_list.append({
             "name": proc.get("code", ""),
-            "date": proc.get("performed_date", "")[:10] if proc.get("performed_date") else ""
+            "department": proc.get("department", "General Medicine"),
+            "date": proc.get("performed_datetime", "")[:10] if proc.get("performed_datetime") else ""
         })
     
     # 11. 按授权范围脱敏

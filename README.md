@@ -180,7 +180,7 @@ flowchart LR
 - 新增 `access_logs` 表，保存审计日志。
 - 新增 `audit_logs` 表，保存登录、授权、病历访问等关键事件及 SHA-256 哈希链；当前版本额外记录 IP 地址和 User-Agent。
 - 保留演示账号种子 SQL：`database/seed_users.sql`。
-- 新增一键数据库脚本：`database/setup_opengauss_copy.ps1`。
+- 新增一键 Demo 数据库脚本：`database/setup_demo_database.ps1`。
 - 当前本地新版开发库使用独立容器 `healthcare-opengauss-dev`，映射到本机 `5433`，数据库名为 `health_security`。
 - 当前新版开发库保留 10 个患者和 10 条加密病历，`patient1` 到 `patient10` 分别绑定到这 10 个患者账号；无账号患者及其病历已清理。
 
@@ -297,7 +297,8 @@ Smart-Healthcare-Record-System/
 ├── database/
 │   ├── schema.sql              # 建表 SQL
 │   ├── seed_users.sql          # 演示账号 SQL
-│   └── setup_opengauss_copy.ps1 # 一键创建/复制数据库脚本
+│   ├── seed_demo_core.sql      # doctor1 和默认授权演示数据
+│   └── setup_demo_database.ps1 # 一键创建数据库、建表并导入演示数据
 ├── docs/                       # 项目设计、计划、接口边界文档
 ├── synthea/                    # Synthea 生成器与输出数据
 └── README.md
@@ -381,180 +382,7 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 Y
 ```
 
-### 2. 一键准备 openGauss 数据库容器
-
-项目提供脚本：
-
-```text
-database/setup_opengauss_copy.ps1
-```
-
-脚本会创建或启动目标 openGauss 容器，等待数据库就绪，创建 `health_security` 数据库，并从 SQL dump 文件恢复表结构和表数据。
-
-当前本地开发环境建议使用独立容器：
-
-```text
-healthcare-opengauss-dev  ->  127.0.0.1:5433/health_security
-```
-
-旧容器 `my_opengauss` 中还保留其他项目的 `music` 数据库，不要把它当作本项目新版主库，也不要删除该容器。
-
-重要说明：
-
-- `omm` 是 openGauss 容器内的初始数据库用户，适合进入容器后执行 `gsql`。
-- 当前 openGauss 镜像会禁止 `omm` 从宿主机远程连接，后端 `.env` 不要使用 `omm`。
-- 后端推荐使用本地普通应用用户 `healthcare` 连接数据库。
-- 数据库脚本可能输出 `omm` 版本的 `DATABASE_URL`，实际配置后端时请使用下文的 `healthcare` 版本。
-
-#### 使用数据库 dump 文件恢复
-
-把dump文件放到：
-
-```text
-database/health_security.copy.sql
-```
-
-然后在项目根目录执行：
-
-```powershell
-.\database\setup_opengauss_copy.ps1 -DumpFilePath .\database\health_security.copy.sql
-```
-
-这会创建新的 openGauss 容器，并把 dump 文件里的表结构和数据恢复进去，包括 `users`、`patients`、`medical_records` 等表。
-
-#### 如果脚本提示 openGauss did not become ready in time
-
-有时 openGauss 容器实际已经启动，但脚本的 ready 检查没有识别到，会出现：
-
-```text
-openGauss did not become ready in time.
-```
-
-先检查容器是否仍在运行：
-
-```powershell
-docker ps
-```
-
-如果能看到 `healthcare-opengauss-dev`，可以手动完成数据库创建和 dump 导入。
-
-进入容器确认 openGauss 可用：
-
-```powershell
-docker exec -u omm healthcare-opengauss-dev bash -lc "source /home/omm/.bashrc; gsql -d postgres -c 'SELECT 1;'"
-```
-
-创建项目数据库：
-
-```powershell
-docker exec -u omm healthcare-opengauss-dev bash -lc "source /home/omm/.bashrc; gsql -d postgres -c 'CREATE DATABASE health_security;'"
-```
-
-如果提示数据库已存在，可以忽略这一步。
-
-复制并导入 dump：
-
-```powershell
-docker cp .\database\health_security.copy.sql healthcare-opengauss-dev:/tmp/health_security.copy.sql
-docker exec -u omm healthcare-opengauss-dev bash -lc "source /home/omm/.bashrc; gsql -d health_security -f /tmp/health_security.copy.sql"
-```
-
-导入完成后继续执行下面的“创建后端数据库用户”步骤。
-
-#### 关于单独的 consents/access_logs SQL 文件
-
-仓库中保留了：
-
-```text
-database/consents_schema.sql
-database/access_logs_schema.sql
-```
-
-这两个文件可作为单表结构参考。正常运行项目时优先使用 `database/schema.sql`，因为当前主 schema 已经包含 `consents`、`access_logs` 和 `audit_logs`，并且支持管理员功能和审计哈希链。
-
-#### 如果只是想创建干净数据库
-
-```powershell
-.\database\setup_opengauss_copy.ps1 -NoSourceCopy
-```
-
-这种方式只会执行 `database/schema.sql` 和 `database/seed_users.sql`，不会包含原数据库中的患者和病历数据。
-
-如果 `5433` 端口被占用，换一个端口，例如：
-
-```powershell
-.\database\setup_opengauss_copy.ps1 -HostPort 15432
-```
-
-如果已经运行过一次脚本，又想再创建一份新的数据库副本，请换一个新的容器名和端口：
-
-```powershell
-.\database\setup_opengauss_copy.ps1 -TargetContainer healthcare-opengauss-copy2 -HostPort 5434
-```
-
-检查容器：
-
-```powershell
-docker ps
-```
-
-进入默认目标容器：
-
-```powershell
-docker exec -it healthcare-opengauss-dev bash
-```
-
-在容器中连接数据库：
-
-```bash
-su - omm
-gsql -d health_security
-```
-
-查看演示账号：
-
-```sql
-SELECT id, username, role, status FROM users;
-```
-
-#### 创建后端数据库用户
-
-后端不能用 `omm` 从宿主机连接数据库，需要创建普通应用用户 `healthcare`。
-
-仍在 `gsql -d health_security` 中执行：
-
-```sql
-CREATE USER healthcare WITH PASSWORD 'Healthcare@123';
-ALTER USER healthcare SET search_path TO public;
-GRANT ALL PRIVILEGES ON DATABASE health_security TO healthcare;
-GRANT USAGE, CREATE ON SCHEMA public TO healthcare;
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO healthcare;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO healthcare;
-```
-
-如果提示 `role "healthcare" already exists`，说明用户已经创建过，可以继续执行后面的 `ALTER USER` 和 `GRANT` 语句。
-
-当前推荐让项目表位于默认 `public` schema，因此手动查询审计日志时直接写表名即可：
-
-```sql
-SELECT id, action, outcome, current_hash
-FROM audit_logs
-ORDER BY id
-LIMIT 5;
-```
-
-退出：
-
-```sql
-\q
-```
-
-```bash
-exit
-exit
-```
-
-### 3. 配置后端 `.env`
+### 2. 配置后端 `.env`
 
 复制示例配置：
 
@@ -562,9 +390,9 @@ exit
 Copy-Item .\backend\.env.example .\backend\.env
 ```
 
-如果使用的是别人提供的数据库 dump 文件，请直接使用提供者给你的 `MEDICAL_RECORD_KEY`，不要重新生成。因为 dump 里的病历密文必须用同一把密钥才能解密。
+一键数据库脚本会从 `backend/.env` 读取 `JWT_SECRET` 和 `MEDICAL_RECORD_KEY`。如果你要重新导入 Synthea 病历，必须先配置 `MEDICAL_RECORD_KEY`，并且后续运行后端时继续使用同一把密钥。
 
-如果是自己初始化干净数据库并重新导入 Synthea 数据，可以生成新的病历加密密钥：
+生成新的病历加密密钥：
 
 ```powershell
 $bytes = New-Object byte[] 32
@@ -574,17 +402,17 @@ $rng.Dispose()
 [Convert]::ToBase64String($bytes)
 ```
 
-复制输出的 base64 字符串，或者复制数据库提供者发给你的 `MEDICAL_RECORD_KEY`，打开配置文件：
+复制输出的 base64 字符串，打开配置文件：
 
 ```powershell
 notepad .\backend\.env
 ```
 
-如果使用数据库脚本默认参数，把 `.env` 改成：
+`.env.example` 是通用模板。使用一键脚本默认参数时，可以把 `.env` 改成：
 
 ```env
 DATABASE_URL=postgresql+psycopg2://healthcare:Healthcare%40123@127.0.0.1:5433/health_security
-JWT_SECRET=dev_secret_for_course_project
+JWT_SECRET=replace_with_your_own_secret
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=60
 MEDICAL_RECORD_KEY=把base64密钥粘贴到这里
@@ -603,13 +431,51 @@ Forbid remote connection with initial user
 
 注意：`MEDICAL_RECORD_KEY` 必须是 base64 编码后的 32 字节密钥。如果数据库里已经有加密病历，换密钥后旧病历将无法解密。
 
-如果同学使用你导出的 dump 文件，里面的 `medical_records.encrypted_data` 也会被复制过去。要让后端正常解密这些病历，同学的 `backend/.env` 必须使用你导入病历时相同的 `MEDICAL_RECORD_KEY`。
-
 如果你用了其他端口，例如 `15432`，则改成：
 
 ```env
 DATABASE_URL=postgresql+psycopg2://healthcare:Healthcare%40123@127.0.0.1:15432/health_security
 ```
+
+### 3. 一键准备 openGauss 数据库和演示数据
+
+项目提供一键 Demo 数据库脚本：
+
+```text
+database/setup_demo_database.ps1
+```
+
+这个脚本可以重复执行，不会重复建表，也不会重复插入同一批测试数据。它会完成：
+
+1. 如果目标容器不存在，则新建 openGauss 容器；如果已存在，则直接启动或复用。
+2. 如果 `health_security` 数据库不存在，则创建数据库。
+3. 执行 `database/schema.sql`，创建全部表和索引。
+4. 执行 `database/seed_users.sql`，插入 `patient1` 到 `patient10`、`doctor1`、`admin`、`auditor`。
+5. 创建或授权后端数据库用户，默认是 `healthcare / Healthcare@123`。
+6. 调用 `backend/scripts/import_synthea_records.py`，从 `synthea/output/fhir/*.json` 导入 10 个合成患者，并加密写入 `medical_records`。
+7. 执行 `database/seed_demo_core.sql`，插入或更新 `doctor1` 的医生资料，并给 `doctor1` 和 `patient1` 建立一条 `DEFAULT` 授权。
+8. 输出各表行数，方便检查初始化结果。
+
+运行代码：（推荐使用独立容器和默认端口）
+
+```powershell
+.\database\setup_demo_database.ps1 -TargetContainer healthcare-opengauss-dev -HostPort 5432
+```
+
+脚本会自动检测容器、数据库、表和演示数据是否已经存在。重复运行同一条命令不会重复建表，也不会重复插入同一批测试数据。
+
+如果本机确实需要使用其他容器名、端口或数据库用户，可以通过参数覆盖：
+
+```powershell
+.\database\setup_demo_database.ps1 -TargetContainer 自己的容器名 -HostPort 自己的端口 -AppUser 自己的数据库用户 -AppPassword "自己的数据库密码"
+```
+
+重要说明：
+
+- `omm` 是 openGauss 容器内部的管理用户，适合在容器内执行 `gsql`，但后端 `.env` 不要使用 `omm` 远程连接。
+- 前端不直接连接数据库，前端只调用后端 API；后端使用 `.env` 中的普通应用用户连接数据库。
+- `patients` 和 `medical_records` 只绑定到 `patient1` 到 `patient10` 这 10 个演示账号；后续新注册患者不会复用这 10 条病历。
+- `access_logs` 和 `audit_logs` 默认可以为空，它们会在登录、授权、查看病历、拒绝访问等真实操作后产生。
 
 ### 4. 安装后端依赖
 
@@ -637,7 +503,7 @@ synthea/output/fhir/
 synthea/output/csv/
 ```
 
-如果只是想快速跑通 Demo，可以跳过本步骤，直接导入合成病历。
+如果只是想快速跑通 Demo，可以跳过本步骤，直接使用仓库中已有的示例 FHIR 数据。
 
 如果需要重新生成数据，先确认 Java：
 
@@ -668,21 +534,9 @@ synthea/output/fhir/
 synthea/output/csv/
 ```
 
-### 7. 导入合成病历
+### 7. 检查数据库演示数据
 
-如果你已经从数据库 dump 文件恢复了完整数据库，通常可以跳过本步骤，因为 dump 里已经包含患者和加密病历数据。
-
-如果你是用 `-NoSourceCopy` 初始化的干净数据库，或者需要重新导入 Synthea 数据，确认 Docker 容器正在运行、`backend/.env` 已配置、`MEDICAL_RECORD_KEY` 已填写、后端依赖已安装后，执行：
-
-```powershell
-cd backend
-.\.venv\Scripts\python.exe .\scripts\import_synthea_records.py
-cd ..
-```
-
-导入脚本会把导入的患者绑定到患者演示账号。这样使用 `patient1` 到 `patient10` 中已绑定病历的账号登录后，就能看到自己的病历。重复执行时，已导入过的 Synthea 患者会被跳过。
-
-当前本地新版开发库的数据状态：
+正常情况下，`setup_demo_database.ps1` 已经导入合成病历，不需要手动执行导入脚本。脚本完成后的基础数据应为：
 
 ```text
 users: 13
@@ -691,6 +545,8 @@ medical_records: 10
 patients_without_account: 0
 records_without_patient: 0
 ```
+
+如果你修改或重新生成了 `synthea/output/fhir/*.json`，可以重新运行一键脚本导入。导入逻辑是幂等的：已经存在的患者和病历不会重复插入。
 
 检查数据库中是否有患者和病历：
 
@@ -818,15 +674,14 @@ password123
 
 ## 当前可演示流程
 
-1. 执行 `database/setup_opengauss_copy.ps1` 准备数据库容器。
-2. 配置 `backend/.env`，填写数据库连接和 `MEDICAL_RECORD_KEY`。
+1. 配置 `backend/.env`，填写数据库连接、`JWT_SECRET` 和 `MEDICAL_RECORD_KEY`。
+2. 执行 `database/setup_demo_database.ps1` 准备 openGauss 容器、数据库、表结构和演示数据。
 3. 安装后端依赖和前端依赖。
-4. 如有需要，使用 Synthea 生成合成数据。
-5. 如果使用的是干净数据库，执行 `backend/scripts/import_synthea_records.py` 导入合成病历；如果已经从 dump 恢复完整数据库，可以跳过导入。
-6. 启动后端和前端。
-7. 使用 `patient1` 到 `patient10` 中任意已绑定病历的患者账号登录，密码为 `password123`。
-8. 进入患者 Dashboard，查看患者基础信息、诊断列表、相关就诊、检查、用药、操作记录。
-9. 查询 `medical_records.encrypted_data`，验证病历正文以密文保存。
+4. 如有需要，使用 Synthea 重新生成合成数据，再重新执行一键数据库脚本导入。
+5. 启动后端和前端。
+6. 使用 `patient1` 到 `patient10` 中任意已绑定病历的患者账号登录，密码为 `password123`。
+7. 进入患者 Dashboard，查看患者基础信息、诊断列表、相关就诊、检查、用药、操作记录。
+8. 查询 `medical_records.encrypted_data`，验证病历正文以密文保存。
 
 ### 管理员端
 

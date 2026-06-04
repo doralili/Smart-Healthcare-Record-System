@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { reactive, ref } from "vue";
 import { useRouter } from "vue-router";
-import { ElMessage } from "element-plus";
 
 import { useAuthStore } from "../stores/auth";
 import { roleHomeMap } from "../router";
+import { ElMessage } from "../utils/message";
 
 const router = useRouter();
 const auth = useAuthStore();
@@ -88,7 +88,7 @@ function submitForm() {
         <el-radio-button label="register">Patient Sign Up</el-radio-button>
       </el-radio-group>
 
-      <el-form label-position="top" @submit.prevent="submitForm" @keyup.enter="submitForm">
+      <el-form label-position="top" @submit.prevent="submitForm">
         <el-form-item label="Username">
           <el-input v-model="form.username" autocomplete="username" />
         </el-form-item>
@@ -98,7 +98,6 @@ function submitForm() {
             v-model="form.password"
             type="password"
             :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
-            @keyup.enter="submitForm"
             show-password
           />
         </el-form-item>

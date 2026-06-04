@@ -1,13 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from datetime import timedelta
 
 from app.core.deps import require_roles
-from app.core.timezone import now_beijing
+from app.core.timezone import BEIJING_TZ, now_beijing
 from app.db.session import get_db
 from app.models.medical_record import MedicalRecord
 from app.models.patient import Patient
 from app.models.consent import Consent
+from app.models.doctor import Doctor
 from app.models.user import User
 from app.services.crypto_service import MedicalRecordCryptoError, decrypt_record_json
 from app.services.audit_service import request_audit_context, write_audit_log
@@ -16,7 +18,171 @@ from app.services.audit_service import request_audit_context, write_audit_log
 router = APIRouter(prefix="/api/patient/me/records", tags=["patient-records"])
 CONSENT_VALID_DAYS = 14
 
+
+class SelectDoctorRequest(BaseModel):
+    doctor_user_id: int
+
+
+def get_current_patient(db: Session, current_user: User) -> Patient:
+    patient = db.query(Patient).filter(Patient.user_id == current_user.id).first()
+    if patient is None:
+        raise HTTPException(status_code=404, detail="Patient profile not found")
+    return patient
+
+
+def consent_display_status(consent: Consent) -> str:
+    end_time = consent.end_time
+    if end_time is not None and end_time.tzinfo is None:
+        end_time = end_time.replace(tzinfo=BEIJING_TZ)
+    elif end_time is not None:
+        end_time = end_time.astimezone(BEIJING_TZ)
+
+    if (
+        consent.status == "ACTIVE"
+        and end_time is not None
+        and end_time <= now_beijing()
+    ):
+        return "EXPIRED"
+    return consent.status
+
+
 # ========== 具体路径的路由（必须放在动态路由之前） ==========
+
+@router.get("/available-doctors")
+def get_available_doctors(
+    department: str = "",
+    current_user: User = Depends(require_roles("PATIENT")),
+    db: Session = Depends(get_db),
+):
+    patient = get_current_patient(db, current_user)
+
+    department_filter = department.strip()
+
+    doctor_query = (
+        db.query(User, Doctor)
+        .join(Doctor, Doctor.user_id == User.id)
+        .filter(User.role == "DOCTOR")
+        .filter(User.status == "ACTIVE")
+        .filter(Doctor.verified.is_(True))
+    )
+
+    if department_filter:
+        doctor_query = doctor_query.filter(Doctor.department.ilike(f"%{department_filter}%"))
+
+    doctors = doctor_query.order_by(Doctor.department.asc(), Doctor.name.asc()).all()
+
+    default_consents = (
+        db.query(Consent)
+        .filter(Consent.patient_id == patient.id)
+        .filter(Consent.record_scope == "DEFAULT")
+        .all()
+    )
+    consent_map = {consent.doctor_id: consent for consent in default_consents}
+
+    return {
+        "doctors": [
+            {
+                "doctor_user_id": user.id,
+                "username": user.username,
+                "name": doctor.name,
+                "department": doctor.department,
+                "license_no": doctor.license_no,
+                "default_consent_status": consent_display_status(consent_map[user.id])
+                if user.id in consent_map
+                else "NONE",
+                "default_consent_id": consent_map[user.id].id
+                if user.id in consent_map
+                else None,
+                "default_consent_end_time": consent_map[user.id].end_time
+                if user.id in consent_map
+                else None,
+            }
+            for user, doctor in doctors
+        ],
+    }
+
+
+@router.post("/default-doctors")
+def select_default_doctor(
+    payload: SelectDoctorRequest,
+    request: Request,
+    current_user: User = Depends(require_roles("PATIENT")),
+    db: Session = Depends(get_db),
+):
+    patient = get_current_patient(db, current_user)
+
+    doctor_user = db.get(User, payload.doctor_user_id)
+    if doctor_user is None or doctor_user.role != "DOCTOR":
+        raise HTTPException(status_code=404, detail="Doctor user not found")
+    if doctor_user.status != "ACTIVE":
+        raise HTTPException(status_code=400, detail="Doctor account is not active")
+
+    doctor_profile = db.query(Doctor).filter(Doctor.user_id == doctor_user.id).first()
+    if doctor_profile is None or not doctor_profile.verified:
+        raise HTTPException(status_code=400, detail="Doctor is not approved")
+
+    consent = (
+        db.query(Consent)
+        .filter(Consent.patient_id == patient.id)
+        .filter(Consent.doctor_id == doctor_user.id)
+        .filter(Consent.record_scope == "DEFAULT")
+        .first()
+    )
+
+    now = now_beijing()
+    expires_at = now + timedelta(days=CONSENT_VALID_DAYS)
+    if consent is None:
+        consent = Consent(
+            patient_id=patient.id,
+            doctor_id=doctor_user.id,
+            record_scope="DEFAULT",
+            permission="READ",
+            status="ACTIVE",
+            consent_source="PATIENT_SELECTED_DOCTOR",
+            default_scope="DEFAULT_CLINICAL",
+            start_time=now,
+            end_time=expires_at,
+            auto_granted_at=now,
+            approved_at=now,
+        )
+        db.add(consent)
+        db.flush()
+    else:
+        consent.permission = "READ"
+        consent.status = "ACTIVE"
+        consent.consent_source = "PATIENT_SELECTED_DOCTOR"
+        consent.default_scope = "DEFAULT_CLINICAL"
+        consent.start_time = now
+        consent.end_time = expires_at
+        consent.auto_granted_at = consent.auto_granted_at or now
+        consent.approved_at = now
+        consent.revoked_at = None
+
+    write_audit_log(
+        db,
+        action="PATIENT_SELECT_DEFAULT_DOCTOR",
+        actor=current_user,
+        target_type="doctor",
+        target_id=doctor_user.id,
+        doctor_id=doctor_user.id,
+        patient_id=patient.id,
+        consent_id=consent.id,
+        record_scope="DEFAULT",
+        outcome="SUCCESS",
+        detail="Patient selected doctor for default clinical access",
+        **request_audit_context(request),
+    )
+    db.commit()
+
+    return {
+        "consent_id": consent.id,
+        "doctor_user_id": doctor_user.id,
+        "patient_id": patient.id,
+        "status": consent.status,
+        "record_scope": consent.record_scope,
+        "end_time": consent.end_time,
+    }
+
 
 @router.get("/pending-consents")
 def get_pending_consents(

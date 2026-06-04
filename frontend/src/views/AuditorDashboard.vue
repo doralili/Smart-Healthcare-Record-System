@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { ElMessage } from "element-plus";
 
 import DashboardLayout from "../layouts/DashboardLayout.vue";
+import { ElMessage } from "../utils/message";
 import {
   getAuditSummary,
   listAuditLogs,

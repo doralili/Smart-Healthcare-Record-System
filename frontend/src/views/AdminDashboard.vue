@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessageBox } from "element-plus";
 
 import DashboardLayout from "../layouts/DashboardLayout.vue";
+import { ElMessage } from "../utils/message";
 import {
   assignDoctorToPatient,
   createAdminUser,
@@ -57,17 +58,14 @@ const assignmentForm = reactive({
 });
 
 const departmentOptions = [
-  "Cardiology",
-  "Emergency",
-  "Family Medicine",
+  "General Medicine",
   "Internal Medicine",
-  "Neurology",
-  "Oncology",
-  "Orthopedics",
-  "Pediatrics",
-  "Psychiatry",
-  "Radiology",
   "Surgery",
+  "Obstetrics and Gynecology",
+  "Pediatrics",
+  "Dentistry",
+  "Mental Health",
+  "Rehabilitation and Preventive Care",
 ];
 
 const approvedDoctors = computed(() =>
@@ -404,7 +402,11 @@ onMounted(loadAdminData);
 
           <el-tab-pane label="Patient Assignment" name="assignments">
             <div class="assignment-layout">
-              <el-form label-position="top" class="assignment-form">
+              <el-form
+                label-position="top"
+                class="assignment-form"
+                @submit.prevent="assignDefaultClinicalAccess"
+              >
                 <el-form-item label="Approved Doctor">
                   <el-select v-model="assignmentForm.doctor_user_id" filterable placeholder="Select doctor">
                     <el-option
@@ -426,7 +428,11 @@ onMounted(loadAdminData);
                   </el-select>
                 </el-form-item>
                 <el-form-item label="Note">
-                  <el-input v-model="assignmentForm.note" maxlength="200" />
+                  <el-input
+                    v-model="assignmentForm.note"
+                    maxlength="200"
+                    @keyup.enter="assignDefaultClinicalAccess"
+                  />
                 </el-form-item>
                 <el-button type="primary" :loading="saving" @click="assignDefaultClinicalAccess">
                   Assign DEFAULT_CLINICAL
@@ -456,15 +462,24 @@ onMounted(loadAdminData);
       </el-card>
 
       <el-dialog v-model="createDialogOpen" title="Create Account" width="520px">
-        <el-form label-position="top">
+        <el-form label-position="top" @submit.prevent="submitCreateUser">
           <el-form-item label="Role">
             <el-segmented v-model="createForm.role" :options="['DOCTOR']" />
           </el-form-item>
           <el-form-item label="Username">
-            <el-input v-model="createForm.username" maxlength="50" />
+            <el-input
+              v-model="createForm.username"
+              maxlength="50"
+              @keyup.enter="submitCreateUser"
+            />
           </el-form-item>
           <el-form-item label="Password">
-            <el-input v-model="createForm.password" show-password maxlength="72" />
+            <el-input
+              v-model="createForm.password"
+              show-password
+              maxlength="72"
+              @keyup.enter="submitCreateUser"
+            />
           </el-form-item>
           <template v-if="createForm.role === 'DOCTOR'">
             <el-form-item label="Department">
@@ -478,7 +493,11 @@ onMounted(loadAdminData);
               </el-select>
             </el-form-item>
             <el-form-item label="License No.">
-              <el-input v-model="createForm.license_no" maxlength="50" />
+              <el-input
+                v-model="createForm.license_no"
+                maxlength="50"
+                @keyup.enter="submitCreateUser"
+              />
             </el-form-item>
             <el-form-item label="Note">
               <el-input v-model="createForm.note" type="textarea" :rows="3" maxlength="300" />
@@ -492,7 +511,7 @@ onMounted(loadAdminData);
       </el-dialog>
 
       <el-dialog v-model="doctorDialogOpen" title="Doctor Review" width="560px">
-        <el-form label-position="top">
+        <el-form label-position="top" @submit.prevent="submitDoctorUpdate">
           <el-form-item label="Department">
             <el-select v-model="doctorForm.department" filterable placeholder="Select department">
               <el-option
@@ -504,7 +523,11 @@ onMounted(loadAdminData);
             </el-select>
           </el-form-item>
           <el-form-item label="License No.">
-            <el-input v-model="doctorForm.license_no" maxlength="50" />
+            <el-input
+              v-model="doctorForm.license_no"
+              maxlength="50"
+              @keyup.enter="submitDoctorUpdate"
+            />
           </el-form-item>
           <el-form-item label="Account Status">
             <el-select v-model="doctorForm.account_status">

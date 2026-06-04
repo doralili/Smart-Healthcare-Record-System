@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { ElMessage } from 'element-plus'
 import DashboardLayout from "../layouts/DashboardLayout.vue"
 import { getMyPatients, submitAccessRequest, getPatientRecord } from '../api/doctor'
+import { ElMessage } from '../utils/message'
 
 const activeTab = ref('patients')
 const searchKeyword = ref('')
 const searchResults = ref<any[]>([])
 const patients = ref<any[]>([])
+const showSignInAlert = ref(true)
 
 // 弹窗相关
 const recordDialogVisible = ref(false)
@@ -139,18 +140,24 @@ const getScopeText = (scope: string) => {
 
 onMounted(() => {
   loadPatients()
+  window.setTimeout(() => {
+    showSignInAlert.value = false
+  }, 2000)
 })
 </script>
 
 <template>
   <DashboardLayout title="Doctor Dashboard">
-    <el-alert
-      title="Doctor account signed in successfully."
-      type="success"
-      show-icon
-      :closable="false"
-      class="mb-4"
-    />
+    <Transition name="dashboard-alert-fade">
+      <el-alert
+        v-if="showSignInAlert"
+        title="Doctor account signed in successfully."
+        type="success"
+        show-icon
+        :closable="false"
+        class="mb-4"
+      />
+    </Transition>
 
     <el-tabs v-model="activeTab">
       <!-- 我的病人列表 Tab - 5个分组 -->
@@ -421,6 +428,7 @@ onMounted(() => {
             placeholder="Search by patient name"
             style="width: 300px; margin-right: 10px"
             @input="searchPatients"
+            @keyup.enter="searchPatients"
           />
           <el-button type="primary" @click="searchPatients">Search</el-button>
         </div>
@@ -576,6 +584,7 @@ onMounted(() => {
         <h3 class="font-bold mb-2">Diagnosis List</h3>
         <el-table :data="currentRecord.diagnosis_list || []" border>
           <el-table-column prop="name" label="Diagnosis" />
+          <el-table-column prop="department" label="Department" width="180" />
           <el-table-column prop="status" label="Status" width="100" />
           <el-table-column prop="date" label="Date" width="120" />
         </el-table>
@@ -617,4 +626,13 @@ onMounted(() => {
 .mb-6 { margin-bottom: 24px; }
 .font-bold { font-weight: bold; }
 .text-muted { color: #909399; }
+
+.dashboard-alert-fade-leave-active {
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+.dashboard-alert-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
 </style>
