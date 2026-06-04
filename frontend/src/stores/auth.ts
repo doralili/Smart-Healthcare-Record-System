@@ -1,15 +1,35 @@
 import { defineStore } from "pinia";
-import { login, register, type UserInfo } from "../api/auth";
+import { getMe, login, register, type UserInfo } from "../api/auth";
 
 interface AuthState {
   token: string;
   user: UserInfo | null;
+  sessionVerified: boolean;
+}
+
+function isTokenExpired(token: string) {
+  try {
+    const payloadPart = token.split(".")[1] || "";
+    const normalizedPayload = payloadPart.replace(/-/g, "+").replace(/_/g, "/");
+    const paddedPayload = normalizedPayload.padEnd(
+      normalizedPayload.length + ((4 - (normalizedPayload.length % 4)) % 4),
+      "=",
+    );
+    const payload = JSON.parse(atob(paddedPayload));
+    if (!payload.exp) {
+      return true;
+    }
+    return Date.now() >= payload.exp * 1000;
+  } catch {
+    return true;
+  }
 }
 
 export const useAuthStore = defineStore("auth", {
   state: (): AuthState => ({
     token: localStorage.getItem("token") || "",
     user: JSON.parse(localStorage.getItem("user") || "null"),
+    sessionVerified: false,
   }),
 
   getters: {
@@ -26,6 +46,7 @@ export const useAuthStore = defineStore("auth", {
 
       localStorage.setItem("token", this.token);
       localStorage.setItem("user", JSON.stringify(this.user));
+      this.sessionVerified = true;
 
       return res.data.user;
     },
@@ -38,9 +59,32 @@ export const useAuthStore = defineStore("auth", {
     logout() {
       this.token = "";
       this.user = null;
+      this.sessionVerified = false;
 
       localStorage.removeItem("token");
       localStorage.removeItem("user");
+    },
+
+    async verifySession() {
+      if (!this.token || isTokenExpired(this.token)) {
+        this.logout();
+        return false;
+      }
+
+      if (this.sessionVerified && this.user) {
+        return true;
+      }
+
+      try {
+        const res = await getMe(this.token);
+        this.user = res.data;
+        this.sessionVerified = true;
+        localStorage.setItem("user", JSON.stringify(this.user));
+        return true;
+      } catch {
+        this.logout();
+        return false;
+      }
     },
   },
 });

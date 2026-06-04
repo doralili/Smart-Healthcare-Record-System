@@ -49,17 +49,18 @@ const router = createRouter({
   ],
 });
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const auth = useAuthStore();
+  const hasValidSession = await auth.verifySession();
 
   if (to.meta.public) {
-    if (auth.isLoggedIn && auth.role) {
+    if (hasValidSession && auth.role) {
       return roleHomeMap[auth.role] || "/login";
     }
     return true;
   }
 
-  if (!auth.isLoggedIn) {
+  if (!hasValidSession) {
     return "/login";
   }
 
