@@ -19,6 +19,8 @@ class AuditLog(Base):
     record_scope = Column(String(20), nullable=True)
     outcome = Column(String(20), nullable=False, default="SUCCESS")
     detail = Column(Text, nullable=True)
+    ip_address = Column(String(64), nullable=True)
+    user_agent = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False)
     previous_hash = Column(String(64), nullable=True)
     current_hash = Column(String(64), nullable=False)

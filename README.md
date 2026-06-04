@@ -134,7 +134,10 @@ flowchart LR
 - 实现登录接口、患者注册接口、当前用户识别、角色依赖 `require_roles()`。
 - 患者可以自助注册；医生、管理员、审计员账号不开放自助注册，应由管理员或种子数据统一发放。
 - 密码使用 `bcrypt` 哈希，登录成功后签发 JWT。
-- 后端从 `backend/.env` 读取数据库、JWT、病历加密密钥等配置。
+- 后端从 `backend/.env` 读取数据库、JWT、病历加密密钥等配置；数据库连接、JWT 密钥和病历加密密钥不再在源码中提供默认值。
+- `.env` 读取使用 `utf-8-sig`，兼容 Windows 下带 BOM 的配置文件。
+- 密码校验直接使用 `bcrypt` 包，避免当前环境中 `passlib + bcrypt` 版本兼容导致登录 500。
+- 删除角色校验中的调试输出，避免在控制台泄露用户名、角色等认证细节。
 - 增加 `MEDICAL_RECORD_KEY` 配置，用于 AES-GCM 病历加密。
 - 增加北京时间工具 `backend/app/core/timezone.py`。
 - 增加 `patients`、`medical_records`、`consents`、`access_logs`、`audit_logs` SQLAlchemy 模型。
@@ -152,6 +155,7 @@ flowchart LR
   - `POST /api/doctor/access-requests`（提交授权申请）
   - `GET /api/doctor/patients/{patient_id}/records`（查看脱敏病历）
   - `GET /api/doctor/search-patients`（搜索患者，带状态标识）
+- 当前版本中，医生申请 `EXTRA` 权限不会覆盖已有 `DEFAULT ACTIVE` 授权；医生患者列表不返回电话和地址，默认授权范围下电话和地址均会脱敏。
 - 增加审计员接口：
   - `GET /api/auditor/summary`（审计日志统计）
   - `GET /api/auditor/audit-logs`（查看最近审计日志）
@@ -174,11 +178,11 @@ flowchart LR
 - 新增 `medical_records` 表，保存加密病历、nonce、数据来源和记录类型。
 - 新增 `consents` 表，保存授权记录（status: ACTIVE/PENDING/REJECTED/REVOKED，scope: DEFAULT/EXTRA）。
 - 新增 `access_logs` 表，保存审计日志。
-- 新增 `audit_logs` 表，保存登录、授权、病历访问等关键事件及 SHA-256 哈希链。
+- 新增 `audit_logs` 表，保存登录、授权、病历访问等关键事件及 SHA-256 哈希链；当前版本额外记录 IP 地址和 User-Agent。
 - 保留演示账号种子 SQL：`database/seed_users.sql`。
 - 新增一键数据库脚本：`database/setup_opengauss_copy.ps1`。
 - 当前本地新版开发库使用独立容器 `healthcare-opengauss-dev`，映射到本机 `5433`，数据库名为 `health_security`。
-- 当前新版开发库已导入 100 个患者和 100 条加密病历，`patient1` 到 `patient10` 已绑定到前 10 个患者账号。
+- 当前新版开发库保留 10 个患者和 10 条加密病历，`patient1` 到 `patient10` 分别绑定到这 10 个患者账号；无账号患者及其病历已清理。
 
 
 
@@ -186,8 +190,10 @@ flowchart LR
 
 - 实现登录页、JWT 保存、角色路由跳转和退出登录。
 - 登录页新增 `Login / Patient Sign Up` 切换；注册入口只创建 `PATIENT` 用户。
+- 登录页和管理员重置密码弹窗不再预填默认密码。
 - 登录页支持回车提交，避免重复提交。
 - Dashboard 顶部显示用户名和角色标签。
+- 前端 API 地址统一使用 `http://127.0.0.1:8000`。
 - 新增患者病历 API 封装 `frontend/src/api/patientRecords.ts`。
 - 新增患者授权管理 API 封装 `frontend/src/api/patientAuth.ts`。
 - 新增医生端 API 封装 `frontend/src/api/doctor.ts`。
@@ -216,10 +222,11 @@ flowchart LR
   - 查看审计日志总数、拒绝事件数和最新事件时间
   - 查看各类审计动作统计
   - 查看最近审计日志及哈希摘要
+  - 查看审计日志中的 IP 和 User-Agent
   - 一键验证 SHA-256 哈希链完整性
 - 管理员 Dashboard 已从占位页升级为管理页面：
   - 查看用户、医生、患者、禁用账号、病历、授权和审计日志数量
-  - 创建医生、审计员、管理员账号
+  - 创建医生账号；当前版本不允许通过页面创建管理员或审计员高权限账号
   - 启用/禁用账号，重置密码
   - 审核医生账号，从固定科室选项中维护科室、执业编号和备注
   - 将患者分配给已审核医生，并自动生成 DEFAULT_CLINICAL 默认授权
@@ -241,14 +248,14 @@ flowchart LR
 | 默认授权与撤销 | 已完成 | 患者可查看已授权医生并撤销；默认授权有效期为 14 天 |
 | 额外授权申请 |  已完成  | 医生提交 → 患者审批 → 授权生效的完整流程；批准后有效期为 14 天 |
 | 字段脱敏策略 | 已完成  | 查看待审批申请、批准/拒绝、查看已授权医生、撤销授权 |
-| 审计日志 | 已完成初版 | `access_logs` 记录医生访问，`audit_logs` 记录登录、授权、病历访问和拒绝事件 |
+| 审计日志 | 已完成初版 | `access_logs` 记录医生访问，`audit_logs` 记录登录、授权、病历访问、拒绝事件、IP 和 User-Agent |
 | 哈希链完整性验证 | 已完成初版 | `audit_logs` 使用 SHA-256 前后哈希链，审计员可验证完整性 |
 | 管理员页面 | 已完成初版 | 可管理账号、审核医生、分配默认医患授权，并查看只读系统安全状态 |
 | 审计员页面 | 已完成初版 | 可查看审计统计、日志列表并验证哈希链 |
 
 其中 `access_logs` 表包含的字段有：id，doctor_id，patient_id，consent_id，action，record_scope。
 
-其中 `audit_logs` 表包含的关键字段有：actor_user_id，actor_role，action，doctor_id，patient_id，consent_id，record_scope，outcome，previous_hash，current_hash。
+其中 `audit_logs` 表包含的关键字段有：actor_user_id，actor_role，actor_username，action，doctor_id，patient_id，consent_id，record_scope，outcome，detail，ip_address，user_agent，previous_hash，current_hash。
 
 
 ## 项目结构
@@ -301,7 +308,7 @@ Smart-Healthcare-Record-System/
 以下步骤默认在 Windows PowerShell 中执行。先进入项目根目录：
 
 ```powershell
-cd D:\VScode-files\Smart-Healthcare-Record-System
+cd "C:\Users\27726\Documents\lxt\Learning\Sophomore\Second term\Computer security\group project"
 ```
 
 如果你的项目路径不同，请替换成自己的路径。
@@ -387,7 +394,7 @@ database/setup_opengauss_copy.ps1
 当前本地开发环境建议使用独立容器：
 
 ```text
-healthcare-opengauss-dev  ->  localhost:5433/health_security
+healthcare-opengauss-dev  ->  127.0.0.1:5433/health_security
 ```
 
 旧容器 `my_opengauss` 中还保留其他项目的 `music` 数据库，不要把它当作本项目新版主库，也不要删除该容器。
@@ -576,7 +583,7 @@ notepad .\backend\.env
 如果使用数据库脚本默认参数，把 `.env` 改成：
 
 ```env
-DATABASE_URL=postgresql+psycopg2://healthcare:Healthcare%40123@localhost:5433/health_security
+DATABASE_URL=postgresql+psycopg2://healthcare:Healthcare%40123@127.0.0.1:5433/health_security
 JWT_SECRET=dev_secret_for_course_project
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=60
@@ -601,7 +608,7 @@ Forbid remote connection with initial user
 如果你用了其他端口，例如 `15432`，则改成：
 
 ```env
-DATABASE_URL=postgresql+psycopg2://healthcare:Healthcare%40123@localhost:15432/health_security
+DATABASE_URL=postgresql+psycopg2://healthcare:Healthcare%40123@127.0.0.1:15432/health_security
 ```
 
 ### 4. 安装后端依赖
@@ -679,8 +686,10 @@ cd ..
 
 ```text
 users: 13
-patients: 100
-medical_records: 100
+patients: 10
+medical_records: 10
+patients_without_account: 0
+records_without_patient: 0
 ```
 
 检查数据库中是否有患者和病历：
@@ -725,9 +734,9 @@ exit
 新开一个 PowerShell 窗口：
 
 ```powershell
-cd D:\VScode-files\Smart-Healthcare-Record-System
+cd "C:\Users\27726\Documents\lxt\Learning\Sophomore\Second term\Computer security\group project"
 cd backend
-.\run_dev.ps1
+C:\Users\27726\AppData\Local\Programs\Python\Python311\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 后端默认地址：
@@ -753,18 +762,18 @@ http://127.0.0.1:8000/docs
 再新开一个 PowerShell 窗口：
 
 ```powershell
-cd D:\VScode-files\Smart-Healthcare-Record-System
+cd "C:\Users\27726\Documents\lxt\Learning\Sophomore\Second term\Computer security\group project"
 cd frontend
-.\run_dev.ps1
+npm.cmd run dev -- --host 127.0.0.1
 ```
 
 前端默认地址：
 
 ```text
-http://localhost:5173
+http://127.0.0.1:5173
 ```
 
-前端启动脚本会在当前 PowerShell 窗口运行 Vite，并在 2 秒后自动打开页面。
+前端命令会在当前 PowerShell 窗口运行 Vite。终端输出端口后，在浏览器打开对应地址即可。
 
 ### 10. 登录演示
 

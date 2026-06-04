@@ -65,6 +65,8 @@ def ensure_audit_schema() -> None:
         record_scope VARCHAR(20) NULL,
         outcome VARCHAR(20) NOT NULL DEFAULT 'SUCCESS',
         detail TEXT NULL,
+        ip_address VARCHAR(64) NULL,
+        user_agent TEXT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         previous_hash VARCHAR(64) NULL,
         current_hash VARCHAR(64) NOT NULL
@@ -108,5 +110,22 @@ def ensure_audit_schema() -> None:
         )
         connection.execute(text(create_access_logs))
         connection.execute(text(create_audit_logs))
+        for column_name, column_type in [
+            ("ip_address", "VARCHAR(64) NULL"),
+            ("user_agent", "TEXT NULL"),
+        ]:
+            has_column = connection.execute(
+                text(
+                    "SELECT 1 FROM pg_attribute "
+                    "WHERE attrelid = 'audit_logs'::regclass "
+                    "AND attname = :column_name "
+                    "AND NOT attisdropped"
+                ),
+                {"column_name": column_name},
+            ).first()
+            if has_column is None:
+                connection.execute(
+                    text(f"ALTER TABLE audit_logs ADD COLUMN {column_name} {column_type}")
+                )
         for statement in indexes:
             connection.execute(text(statement))

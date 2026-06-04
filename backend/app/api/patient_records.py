@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from datetime import timedelta
 
@@ -10,7 +10,7 @@ from app.models.patient import Patient
 from app.models.consent import Consent
 from app.models.user import User
 from app.services.crypto_service import MedicalRecordCryptoError, decrypt_record_json
-from app.services.audit_service import write_audit_log
+from app.services.audit_service import request_audit_context, write_audit_log
 
 
 router = APIRouter(prefix="/api/patient/me/records", tags=["patient-records"])
@@ -78,6 +78,7 @@ def get_my_doctors(
 @router.post("/consents/{consent_id}/approve")
 def approve_consent(
     consent_id: int,
+    request: Request,
     current_user: User = Depends(require_roles("PATIENT")),
     db: Session = Depends(get_db),
 ):
@@ -110,6 +111,7 @@ def approve_consent(
         record_scope=consent.record_scope,
         outcome="SUCCESS",
         detail="Patient approved doctor access request",
+        **request_audit_context(request),
     )
     db.commit()
     
@@ -119,6 +121,7 @@ def approve_consent(
 @router.post("/consents/{consent_id}/reject")
 def reject_consent(
     consent_id: int,
+    request: Request,
     current_user: User = Depends(require_roles("PATIENT")),
     db: Session = Depends(get_db),
 ):
@@ -147,6 +150,7 @@ def reject_consent(
         record_scope=consent.record_scope,
         outcome="DENIED",
         detail="Patient rejected doctor access request",
+        **request_audit_context(request),
     )
     db.commit()
     
@@ -156,6 +160,7 @@ def reject_consent(
 @router.post("/consents/{consent_id}/revoke")
 def revoke_consent(
     consent_id: int,
+    request: Request,
     current_user: User = Depends(require_roles("PATIENT")),
     db: Session = Depends(get_db),
 ):
@@ -185,6 +190,7 @@ def revoke_consent(
         record_scope=consent.record_scope,
         outcome="SUCCESS",
         detail="Patient revoked doctor access",
+        **request_audit_context(request),
     )
     db.commit()
     
@@ -221,6 +227,7 @@ def list_my_records(
 @router.get("/{record_id}")
 def get_my_record_detail(
     record_id: int,
+    request: Request,
     current_user: User = Depends(require_roles("PATIENT")),
     db: Session = Depends(get_db),
 ):
@@ -257,6 +264,7 @@ def get_my_record_detail(
         patient_id=patient.id,
         outcome="SUCCESS",
         detail="Patient viewed own medical record",
+        **request_audit_context(request),
     )
     db.commit()
 

@@ -1,7 +1,7 @@
 from datetime import timedelta
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -16,13 +16,13 @@ from app.models.doctor import Doctor
 from app.models.medical_record import MedicalRecord
 from app.models.patient import Patient
 from app.models.user import User
-from app.services.audit_service import verify_audit_chain, write_audit_log
+from app.services.audit_service import request_audit_context, verify_audit_chain, write_audit_log
 
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 CONSENT_VALID_DAYS = 14
 
-ManagedRole = Literal["DOCTOR", "AUDITOR", "ADMIN"]
+ManagedRole = Literal["DOCTOR"]
 AccountStatus = Literal["ACTIVE", "DISABLED", "PENDING"]
 
 
@@ -125,6 +125,7 @@ def list_users(
 @router.post("/users", status_code=status.HTTP_201_CREATED)
 def create_managed_user(
     payload: CreateUserRequest,
+    request: Request,
     current_user: User = Depends(require_roles("ADMIN")),
     db: Session = Depends(get_db),
 ):
@@ -165,6 +166,7 @@ def create_managed_user(
         target_id=user.id,
         outcome="SUCCESS",
         detail=f"Created {payload.role} account",
+        **request_audit_context(request),
     )
     db.commit()
     db.refresh(user)
@@ -181,6 +183,7 @@ def create_managed_user(
 def update_user_status(
     user_id: int,
     payload: UpdateUserStatusRequest,
+    request: Request,
     current_user: User = Depends(require_roles("ADMIN")),
     db: Session = Depends(get_db),
 ):
@@ -199,6 +202,7 @@ def update_user_status(
         target_id=user.id,
         outcome="SUCCESS",
         detail=f"Set status to {payload.status}",
+        **request_audit_context(request),
     )
     db.commit()
 
@@ -209,6 +213,7 @@ def update_user_status(
 def reset_user_password(
     user_id: int,
     payload: ResetPasswordRequest,
+    request: Request,
     current_user: User = Depends(require_roles("ADMIN")),
     db: Session = Depends(get_db),
 ):
@@ -225,6 +230,7 @@ def reset_user_password(
         target_id=user.id,
         outcome="SUCCESS",
         detail="Password reset by admin",
+        **request_audit_context(request),
     )
     db.commit()
 
@@ -272,6 +278,7 @@ def list_doctors(
 def update_doctor(
     user_id: int,
     payload: UpdateDoctorRequest,
+    request: Request,
     current_user: User = Depends(require_roles("ADMIN")),
     db: Session = Depends(get_db),
 ):
@@ -304,6 +311,7 @@ def update_doctor(
         doctor_id=user.id,
         outcome="SUCCESS",
         detail="Doctor profile or review status updated",
+        **request_audit_context(request),
     )
     db.commit()
 
@@ -343,6 +351,7 @@ def list_patients_for_assignment(
 @router.post("/assignments")
 def assign_patient_to_doctor(
     payload: AssignDoctorRequest,
+    request: Request,
     current_user: User = Depends(require_roles("ADMIN")),
     db: Session = Depends(get_db),
 ):
@@ -363,6 +372,7 @@ def assign_patient_to_doctor(
     consent = db.query(Consent).filter(
         Consent.doctor_id == doctor_user.id,
         Consent.patient_id == patient.id,
+        Consent.record_scope == "DEFAULT",
     ).first()
 
     now = now_beijing()
@@ -383,7 +393,6 @@ def assign_patient_to_doctor(
         db.add(consent)
         db.flush()
     else:
-        consent.record_scope = "DEFAULT"
         consent.permission = "READ"
         consent.status = "ACTIVE"
         consent.consent_source = "DEFAULT_CLINICAL"
@@ -405,6 +414,7 @@ def assign_patient_to_doctor(
         record_scope="DEFAULT",
         outcome="SUCCESS",
         detail=payload.note or "Admin assigned default clinical access",
+        **request_audit_context(request),
     )
     db.commit()
 

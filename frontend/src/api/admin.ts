@@ -14,7 +14,7 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use((response) => response.data);
 
-export type ManagedRole = "DOCTOR" | "AUDITOR" | "ADMIN";
+export type ManagedRole = "DOCTOR";
 export type AccountStatus = "ACTIVE" | "DISABLED" | "PENDING";
 export type DoctorStatus = "PENDING" | "APPROVED" | "DISABLED";
 

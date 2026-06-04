@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.core.deps import get_db, get_current_user, require_roles
 from app.core.timezone import now_beijing
@@ -8,7 +8,7 @@ from app.models.consent import Consent
 from app.models.patient import Patient
 from app.schemas.doctor import AccessRequestCreate
 from app.services.masking import mask_record_by_scope
-from app.services.audit_service import write_audit_log
+from app.services.audit_service import request_audit_context, write_audit_log
 
 router = APIRouter(prefix="/api/doctor", tags=["医生业务模块"])
 
@@ -30,6 +30,23 @@ def consent_display_status(consent: Consent) -> str:
     ):
         return "EXPIRED"
     return consent.status
+
+
+def mask_address(address: str | None) -> str:
+    if not address:
+        return ""
+    return str(address).split(",")[0].strip()
+
+
+def consent_priority(consent: Consent) -> tuple[int, int]:
+    status_rank = {
+        "ACTIVE": 4,
+        "PENDING": 3,
+        "REJECTED": 2,
+        "REVOKED": 1,
+    }.get(consent_display_status(consent), 0)
+    scope_rank = {"EXTRA": 2, "DEFAULT": 1}.get(consent.record_scope, 0)
+    return status_rank, scope_rank
 
 # 获取名下授权患者列表
 @router.get("/my-patients")
@@ -54,8 +71,6 @@ def get_my_patients(
                 "full_name": patient.full_name,
                 "gender": patient.gender,
                 "birth_date": patient.birth_date,
-                "phone": patient.phone,
-                "address": patient.address,
                 "consent_status": consent_display_status(consent),      # ACTIVE, PENDING, REVOKED, EXPIRED
                 "scope": consent.record_scope,         # DEFAULT, EXTRA
                 "consent_id": consent.id
@@ -67,37 +82,40 @@ def get_my_patients(
 @router.post("/access-requests")
 def submit_access_request(
     info: AccessRequestCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     _=Depends(require_roles("DOCTOR"))
 ):
     ensure_doctor_approved(db, current_user)
-    # 查找是否已存在记录
-    existing = db.query(Consent).filter(
+    patient = db.query(Patient).filter(Patient.id == info.patient_id).first()
+    if patient is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    existing_same_scope = db.query(Consent).filter(
         Consent.patient_id == info.patient_id,
-        Consent.doctor_id == current_user.id
+        Consent.doctor_id == current_user.id,
+        Consent.record_scope == info.record_scope,
     ).first()
     
-    if existing:
-        # 已有记录：更新状态和范围
-        if existing.status == "ACTIVE":
-            # 从 DEFAULT 升级到 EXTRA
-            existing.record_scope = info.record_scope
-            existing.status = "PENDING"
-            existing.request_reason = info.reason
-        elif existing.status == "PENDING":
+    if existing_same_scope:
+        if existing_same_scope.status == "ACTIVE":
+            raise HTTPException(status_code=400, detail="Already has active access for this scope")
+        elif existing_same_scope.status == "PENDING":
             raise HTTPException(status_code=400, detail="Already has a pending request")
-        elif existing.status == "REVOKED":
-            # 重新申请
-            existing.record_scope = info.record_scope
-            existing.status = "PENDING"
-            existing.request_reason = info.reason
+        elif existing_same_scope.status in {"REJECTED", "REVOKED"}:
+            existing_same_scope.status = "PENDING"
+            existing_same_scope.request_reason = info.reason
+            existing_same_scope.consent_source = "EXPLICIT_REQUEST"
+            existing_same_scope.start_time = None
+            existing_same_scope.end_time = None
+            existing_same_scope.approved_at = None
+            existing_same_scope.revoked_at = None
+            consent_for_log = existing_same_scope
         else:
             raise HTTPException(status_code=400, detail="Invalid status")
-        consent_for_log = existing
     else:
-        # 无记录：创建新记录
-        new_consent = Consent(
+        consent_for_log = Consent(
             patient_id=info.patient_id,
             doctor_id=current_user.id,
             record_scope=info.record_scope,
@@ -105,9 +123,8 @@ def submit_access_request(
             request_reason=info.reason,
             consent_source="EXPLICIT_REQUEST"
         )
-        db.add(new_consent)
+        db.add(consent_for_log)
         db.flush()
-        consent_for_log = new_consent
     
     write_audit_log(
         db,
@@ -121,6 +138,7 @@ def submit_access_request(
         record_scope=info.record_scope,
         outcome="SUCCESS",
         detail=info.reason,
+        **request_audit_context(request),
     )
     db.commit()
     return {"msg": "Access request submitted, waiting for patient approval"}
@@ -129,6 +147,7 @@ def submit_access_request(
 @router.get("/patients/{patient_id}/records")
 def get_patient_mask_record(
     patient_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     _=Depends(require_roles("DOCTOR"))
@@ -146,7 +165,7 @@ def get_patient_mask_record(
         Consent.status == "ACTIVE",
         Consent.end_time.isnot(None),
         Consent.end_time > now_beijing(),
-    ).first()
+    ).order_by(Consent.record_scope.desc(), Consent.end_time.desc()).first()
 
     # 2. 记录审计日志
     log = AccessLog(
@@ -169,6 +188,7 @@ def get_patient_mask_record(
         record_scope=valid_consent.record_scope if valid_consent else None,
         outcome="SUCCESS" if valid_consent else "DENIED",
         detail="Doctor viewed patient medical record" if valid_consent else "Doctor record view denied",
+        **request_audit_context(request),
     )
     db.commit()
 
@@ -251,7 +271,7 @@ def get_patient_mask_record(
             "name": patient.full_name,
             "gender": patient.gender,
             "phone": mask_phone(patient.phone),
-            "address": patient.address,
+            "address": mask_address(patient.address),
             "birth_date": str(patient.birth_date) if patient.birth_date else "",
             "visits": len(clinical_data.get("encounters", [])),
             "diagnoses": len(conditions),
@@ -301,9 +321,13 @@ def search_patients(
     # 创建 patient_id -> 授权信息的映射
     consent_map = {}
     for c in existing_consents:
+        current = consent_map.get(c.patient_id)
+        if current and current["priority"] >= consent_priority(c):
+            continue
         consent_map[c.patient_id] = {
             "status": consent_display_status(c),
-            "scope": c.record_scope
+            "scope": c.record_scope,
+            "priority": consent_priority(c),
         }
     
     result = []

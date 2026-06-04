@@ -147,6 +147,8 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     record_scope VARCHAR(20) NULL,
     outcome VARCHAR(20) NOT NULL DEFAULT 'SUCCESS',
     detail TEXT NULL,
+    ip_address VARCHAR(64) NULL,
+    user_agent TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     previous_hash VARCHAR(64) NULL,
     current_hash VARCHAR(64) NOT NULL

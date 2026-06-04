@@ -2,6 +2,7 @@ import hashlib
 import json
 from typing import Any
 
+from fastapi import Request
 from sqlalchemy.orm import Session
 
 from app.core.timezone import BEIJING_TZ, now_beijing
@@ -55,6 +56,8 @@ def write_audit_log(
     record_scope: str | None = None,
     outcome: str = "SUCCESS",
     detail: str | None = None,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
 ) -> AuditLog:
     previous = db.query(AuditLog).order_by(AuditLog.id.desc()).first()
     previous_hash = previous.current_hash if previous else None
@@ -73,6 +76,8 @@ def write_audit_log(
         record_scope=record_scope,
         outcome=outcome,
         detail=detail,
+        ip_address=ip_address,
+        user_agent=user_agent,
         created_at=created_at,
         previous_hash=previous_hash,
         current_hash="",
@@ -80,6 +85,13 @@ def write_audit_log(
     log.current_hash = calculate_audit_hash(log, previous_hash)
     db.add(log)
     return log
+
+
+def request_audit_context(request: Request) -> dict[str, str | None]:
+    return {
+        "ip_address": request.client.host if request.client else None,
+        "user_agent": request.headers.get("user-agent"),
+    }
 
 
 def verify_audit_chain(db: Session) -> dict[str, Any]:

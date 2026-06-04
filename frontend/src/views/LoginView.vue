@@ -14,7 +14,7 @@ const mode = ref<"login" | "register">("login");
 
 const form = reactive({
   username: "",
-  password: "password123",
+  password: "",
 });
 
 async function submitLogin() {

@@ -176,6 +176,8 @@ onMounted(async () => {
           <el-table-column prop="patient_id" label="Patient" width="100" />
           <el-table-column prop="doctor_id" label="Doctor" width="100" />
           <el-table-column prop="record_scope" label="Scope" width="100" />
+          <el-table-column prop="ip_address" label="IP" min-width="130" />
+          <el-table-column prop="user_agent" label="User Agent" min-width="240" show-overflow-tooltip />
           <el-table-column label="Current Hash" min-width="190">
             <template #default="{ row }">
               <code>{{ shortHash(row.current_hash) }}</code>

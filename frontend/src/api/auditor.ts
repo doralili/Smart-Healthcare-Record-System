@@ -38,6 +38,8 @@ export interface AuditLog {
   record_scope: string | null;
   outcome: string;
   detail: string | null;
+  ip_address: string | null;
+  user_agent: string | null;
   created_at: string;
   previous_hash: string | null;
   current_hash: string;

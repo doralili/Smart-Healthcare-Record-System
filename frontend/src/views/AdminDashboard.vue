@@ -35,7 +35,7 @@ const selectedDoctor = ref<AdminDoctor | null>(null);
 
 const createForm = reactive({
   username: "",
-  password: "password123",
+  password: "",
   role: "DOCTOR" as ManagedRole,
   department: "",
   license_no: "",
@@ -126,7 +126,7 @@ async function loadAdminData() {
 
 function openCreateDialog() {
   createForm.username = "";
-  createForm.password = "password123";
+  createForm.password = "";
   createForm.role = "DOCTOR";
   createForm.department = "";
   createForm.license_no = "";
@@ -179,7 +179,7 @@ async function resetPassword(user: AdminUser) {
       `Reset password for ${user.username}`,
       "Reset Password",
       {
-        inputValue: "password123",
+        inputValue: "",
         inputPattern: /^.{1,72}$/,
         inputErrorMessage: "Password must be 1-72 characters",
         confirmButtonText: "Reset",
@@ -458,7 +458,7 @@ onMounted(loadAdminData);
       <el-dialog v-model="createDialogOpen" title="Create Account" width="520px">
         <el-form label-position="top">
           <el-form-item label="Role">
-            <el-segmented v-model="createForm.role" :options="['DOCTOR', 'AUDITOR', 'ADMIN']" />
+            <el-segmented v-model="createForm.role" :options="['DOCTOR']" />
           </el-form-item>
           <el-form-item label="Username">
             <el-input v-model="createForm.username" maxlength="50" />

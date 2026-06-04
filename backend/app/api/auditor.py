@@ -63,6 +63,8 @@ def list_audit_logs(
                 "record_scope": log.record_scope,
                 "outcome": log.outcome,
                 "detail": log.detail,
+                "ip_address": log.ip_address,
+                "user_agent": log.user_agent,
                 "created_at": log.created_at,
                 "previous_hash": log.previous_hash,
                 "current_hash": log.current_hash,

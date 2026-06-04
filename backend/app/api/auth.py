@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -8,14 +8,14 @@ from app.core.timezone import now_beijing
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
-from app.services.audit_service import write_audit_log
+from app.services.audit_service import request_audit_context, write_audit_log
 
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, db: Session = Depends(get_db)):
+def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)):
     username = payload.username.strip()
 
     if not username:
@@ -57,6 +57,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
         target_id=user.id,
         outcome="SUCCESS",
         detail="Patient self-registration",
+        **request_audit_context(request),
     )
     db.commit()
     db.refresh(user)
@@ -70,7 +71,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == payload.username).first()
 
     if user is None or not verify_password(payload.password, user.password_hash):
@@ -101,6 +102,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         target_id=user.id,
         outcome="SUCCESS",
         detail="User signed in",
+        **request_audit_context(request),
     )
     db.commit()
 
