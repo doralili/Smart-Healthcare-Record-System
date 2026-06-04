@@ -258,50 +258,108 @@ flowchart LR
 其中 `audit_logs` 表包含的关键字段有：actor_user_id，actor_role，actor_username，action，doctor_id，patient_id，consent_id，record_scope，outcome，detail，ip_address，user_agent，previous_hash，current_hash。
 
 
-## 项目结构
+## 项目结构（基于当前工作区）
 
 ```text
 Smart-Healthcare-Record-System/
-├── backend/                    # FastAPI 后端
-│   ├── app/
-│   │   ├── api/                # API 路由
-│   │   │   ├── auth.py         # 登录认证
-│   │   │   ├── doctor.py       # 医生端接口
-│   │   │   ├── patient_records.py  # 患者病历和授权接口
-│   │   │   └── ...
-│   │   ├── core/               # 配置、认证、安全工具
-│   │   ├── db/                 # SQLAlchemy session
-│   │   ├── models/             # 数据库模型
-│   │   ├── schemas/            # 请求/响应结构
-│   │   └── services/           # 加密等业务服务
-│   ├── scripts/                # Synthea 导入脚本
+├── 测试手册.md
+├── README.md
+├── backend/
 │   ├── requirements.txt
-│   └── run_dev.ps1
-├── frontend/                   # Vue 3 前端
-│   ├── src/
-│   │   ├── api/                # 前端 API 封装
-│   │   │   ├── auth.ts         # 认证 API
-│   │   │   ├── doctor.ts       # 医生端 API
-│   │   │   ├── patientRecords.ts   # 患者病历 API
-│   │   │   └── patientAuth.ts      # 患者授权 API
-│   │   ├── layouts/            # 页面布局
-│   │   ├── router/             # 路由和角色跳转
-│   │   ├── stores/             # Pinia 状态
-│   │   └── views/              # 登录页和各角色页面
-│   │       ├── Login.vue
-│   │       ├── PatientDashboard.vue   # 患者端（病历+授权管理）
-│   │       ├── DoctorDashboard.vue    # 医生端（病人列表+搜索）
-│   │       ├── AdminDashboard.vue
-│   │       └── AuditorDashboard.vue
-│   └── run_dev.ps1
+│   ├── run_dev.ps1
+│   ├── app/
+│   │   ├── __init__.py
+│   │   ├── main.py
+│   │   ├── seed_users.py
+│   │   ├── api/
+│   │   │   ├── __init__.py
+│   │   │   ├── admin.py
+│   │   │   ├── auditor.py
+│   │   │   ├── auth.py
+│   │   │   ├── doctor.py
+│   │   │   ├── patient_records.py
+│   │   │   └── rbac_demo.py
+│   │   ├── core/
+│   │   │   ├── __init__.py
+│   │   │   ├── config.py
+│   │   │   ├── db.py
+│   │   │   ├── deps.py
+│   │   │   ├── security.py
+│   │   │   └── timezone.py
+│   │   ├── db/
+│   │   │   ├── __init__.py
+│   │   │   ├── init_db.py
+│   │   │   └── session.py
+│   │   ├── models/
+│   │   │   ├── __init__.py
+│   │   │   ├── access_log.py
+│   │   │   ├── audit_log.py
+│   │   │   ├── consent.py
+│   │   │   ├── doctor.py
+│   │   │   ├── medical_record.py
+│   │   │   ├── patient.py
+│   │   │   └── user.py
+│   │   ├── schemas/
+│   │   │   ├── __init__.py
+│   │   │   ├── auth.py
+│   │   │   └── doctor.py
+│   │   └── services/
+│   │       ├── __init__.py
+│   │       ├── audit_service.py
+│   │       ├── crypto_service.py
+│   │       └── masking.py
+│   └── scripts/
+│       └── import_synthea_records.py
 ├── database/
-│   ├── schema.sql              # 建表 SQL
-│   ├── seed_users.sql          # 演示账号 SQL
-│   ├── seed_demo_core.sql      # doctor1 和默认授权演示数据
-│   └── setup_demo_database.ps1 # 一键创建数据库、建表并导入演示数据
-├── docs/                       # 项目设计、计划、接口边界文档
-├── synthea/                    # Synthea 生成器与输出数据
-└── README.md
+│   ├── health_security.copy.sql
+│   ├── schema.sql
+│   ├── seed_demo_core.sql
+│   ├── seed_users.sql
+│   └── setup_demo_database.ps1
+├── docs/
+│   ├── API_BOUNDARY.md
+│   ├── GROUP_PROJECT_PLAN_CN.md
+│   └── PROJECT_DESIGN.md
+├── frontend/
+│   ├── index.html
+│   ├── package.json
+│   ├── README.md
+│   ├── run_dev.ps1
+│   ├── tsconfig.app.json
+│   ├── tsconfig.json
+│   ├── tsconfig.node.json
+│   ├── vite.config.ts
+│   ├── public/
+│   └── src/
+     ├── App.vue
+     ├── main.ts
+     ├── style.css
+     ├── api/
+     │   ├── admin.ts
+     │   ├── auditor.ts
+     │   ├── auth.ts
+     │   ├── doctor.ts
+     │   ├── patientAuth.ts
+     │   └── patientRecords.ts
+     ├── layouts/
+     │   └── DashboardLayout.vue
+     ├── router/
+     │   └── index.ts
+     ├── stores/
+     │   └── auth.ts
+     ├── utils/
+     │   └── message.ts
+     └── views/
+       ├── AdminDashboard.vue
+       ├── AuditorDashboard.vue
+       ├── DoctorDashboard.vue
+       ├── LoginView.vue
+       └── PatientDashboard.vue
+├── scripts/
+└── synthea/
+  └── output/
+    ├── csv/
+    └── fhir/
 ```
 
 ## 运行方式
