@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import DashboardLayout from "../layouts/DashboardLayout.vue"
-import { getMyPatients, submitAccessRequest, getPatientRecord, updatePatientRecord } from '../api/doctor'
+import { getMyPatients, getDoctorProfile, submitAccessRequest, getPatientRecord, updatePatientRecord } from '../api/doctor'
 import { ElMessage } from '../utils/message'
 
 const activeTab = ref('patients')
@@ -9,6 +9,10 @@ const searchKeyword = ref('')
 const searchResults = ref<any[]>([])
 const patients = ref<any[]>([])
 const showSignInAlert = ref(true)
+const doctorProfile = ref<any>(null)
+const dashboardTitle = computed(() =>
+  doctorProfile.value?.name ? `${doctorProfile.value.name} Dashboard` : 'Doctor Dashboard',
+)
 
 // 弹窗相关
 const recordDialogVisible = ref(false)
@@ -102,6 +106,14 @@ const openRecord = async (patient: any) => {
   }
 }
 
+const loadDoctorProfile = async () => {
+  try {
+    doctorProfile.value = await getDoctorProfile()
+  } catch (err) {
+    console.error('Failed to load doctor profile:', err)
+  }
+}
+
 const openEditRecord = () => {
   if (!currentRecord.value?.record_id || !currentRecord.value?.raw_record) {
     ElMessage.warning('Full access medical record is required before editing')
@@ -181,6 +193,7 @@ const getScopeText = (scope: string) => {
 }
 
 onMounted(() => {
+  loadDoctorProfile()
   loadPatients()
   window.setTimeout(() => {
     showSignInAlert.value = false
@@ -189,7 +202,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <DashboardLayout title="Doctor Dashboard">
+  <DashboardLayout :title="dashboardTitle" :display-name="doctorProfile?.name">
     <Transition name="dashboard-alert-fade">
       <el-alert
         v-if="showSignInAlert"
@@ -200,6 +213,12 @@ onMounted(() => {
         class="mb-4"
       />
     </Transition>
+
+    <el-card v-if="doctorProfile" class="doctor-profile-card" shadow="never">
+      <strong>{{ doctorProfile.name || doctorProfile.username }}</strong>
+      <span>{{ doctorProfile.department || 'No department' }}</span>
+      <span>{{ doctorProfile.license_no || 'No license number' }}</span>
+    </el-card>
 
     <el-tabs v-model="activeTab">
       <!-- 我的病人列表 Tab - 5个分组 -->
@@ -711,6 +730,23 @@ onMounted(() => {
 .mb-6 { margin-bottom: 24px; }
 .font-bold { font-weight: bold; }
 .text-muted { color: #909399; }
+
+.doctor-profile-card {
+  margin-bottom: 16px;
+  border-radius: 8px;
+}
+
+.doctor-profile-card :deep(.el-card__body) {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  color: #606266;
+}
+
+.doctor-profile-card strong {
+  color: #172033;
+}
 
 .record-dialog-actions {
   display: flex;

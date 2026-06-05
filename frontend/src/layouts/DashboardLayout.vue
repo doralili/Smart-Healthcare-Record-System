@@ -5,6 +5,7 @@ import { useAuthStore } from "../stores/auth";
 
 defineProps<{
   title: string;
+  displayName?: string;
 }>();
 
 const router = useRouter();
@@ -28,7 +29,7 @@ function logout() {
     <header class="dashboard-header">
       <div>
         <h1>{{ title }}</h1>
-        <p>{{ auth.user?.username }} · {{ roleLabels[auth.user?.role || ""] || auth.user?.role }}</p>
+        <p>{{ displayName || auth.user?.username }} · {{ roleLabels[auth.user?.role || ""] || auth.user?.role }}</p>
       </div>
 
       <el-button type="danger" plain @click="logout">Logout</el-button>

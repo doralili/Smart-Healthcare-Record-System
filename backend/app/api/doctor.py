@@ -93,6 +93,26 @@ def has_active_full_consent(db: Session, *, patient_id: int, doctor_user_id: int
         required_scope="EXTRA",
     ) is not None
 
+
+@router.get("/me")
+def get_doctor_profile(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _=Depends(require_roles("DOCTOR")),
+):
+    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
+    if doctor is None:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+
+    return {
+        "user_id": current_user.id,
+        "username": current_user.username,
+        "name": doctor.name,
+        "department": doctor.department,
+        "license_no": doctor.license_no,
+        "verified": doctor.verified,
+    }
+
 # 获取名下授权患者列表
 @router.get("/my-patients")
 def get_my_patients(

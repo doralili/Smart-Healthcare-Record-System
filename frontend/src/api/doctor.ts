@@ -28,6 +28,17 @@ export function getMyPatients() {
 }
 
 // 提交授权申请
+export function getDoctorProfile() {
+  return api.get<unknown, {
+    user_id: number
+    username: string
+    name: string
+    department: string | null
+    license_no: string | null
+    verified: boolean
+  }>('/api/doctor/me')
+}
+
 export function submitAccessRequest(data: any) {
   return api.post('/api/doctor/access-requests', data)
 }
