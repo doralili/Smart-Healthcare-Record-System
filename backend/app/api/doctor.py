@@ -84,6 +84,15 @@ def get_valid_consent(
 
     return query.order_by(Consent.record_scope.desc(), Consent.end_time.desc()).first()
 
+
+def has_active_full_consent(db: Session, *, patient_id: int, doctor_user_id: int) -> bool:
+    return get_valid_consent(
+        db,
+        patient_id=patient_id,
+        doctor_user_id=doctor_user_id,
+        required_scope="EXTRA",
+    ) is not None
+
 # 获取名下授权患者列表
 @router.get("/my-patients")
 def get_my_patients(
@@ -96,9 +105,15 @@ def get_my_patients(
     consents = db.query(Consent).filter(
         Consent.doctor_id == current_user.id
     ).all()
+
+    best_consents_by_patient: dict[int, Consent] = {}
+    for consent in consents:
+        current_best = best_consents_by_patient.get(consent.patient_id)
+        if current_best is None or consent_priority(consent) > consent_priority(current_best):
+            best_consents_by_patient[consent.patient_id] = consent
     
     result = []
-    for consent in consents:
+    for consent in best_consents_by_patient.values():
         # Get patient info
         patient = db.query(Patient).filter(Patient.id == consent.patient_id).first()
         if patient:
@@ -128,6 +143,24 @@ def submit_access_request(
     if patient is None:
         raise HTTPException(status_code=404, detail="Patient not found")
 
+    if info.record_scope == "DEFAULT" and has_active_full_consent(
+        db,
+        patient_id=info.patient_id,
+        doctor_user_id=current_user.id,
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Already has active full access; default access is covered",
+        )
+
+    existing_pending = db.query(Consent).filter(
+        Consent.patient_id == info.patient_id,
+        Consent.doctor_id == current_user.id,
+        Consent.status == "PENDING",
+    ).first()
+    if existing_pending:
+        raise HTTPException(status_code=400, detail="Already has a pending request")
+
     existing_same_scope = db.query(Consent).filter(
         Consent.patient_id == info.patient_id,
         Consent.doctor_id == current_user.id,
@@ -135,11 +168,10 @@ def submit_access_request(
     ).first()
     
     if existing_same_scope:
-        if existing_same_scope.status == "ACTIVE":
+        existing_status = consent_display_status(existing_same_scope)
+        if existing_status == "ACTIVE":
             raise HTTPException(status_code=400, detail="Already has active access for this scope")
-        elif existing_same_scope.status == "PENDING":
-            raise HTTPException(status_code=400, detail="Already has a pending request")
-        elif existing_same_scope.status in {"REJECTED", "REVOKED"}:
+        elif existing_status in {"REJECTED", "REVOKED", "EXPIRED"}:
             existing_same_scope.status = "PENDING"
             existing_same_scope.request_reason = info.reason
             existing_same_scope.consent_source = "EXPLICIT_REQUEST"

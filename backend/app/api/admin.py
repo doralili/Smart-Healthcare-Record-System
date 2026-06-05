@@ -69,6 +69,17 @@ def _get_doctor_profile(db: Session, user_id: int) -> Doctor | None:
     return db.query(Doctor).filter(Doctor.user_id == user_id).first()
 
 
+def _has_active_full_consent(db: Session, *, patient_id: int, doctor_user_id: int) -> bool:
+    return db.query(Consent).filter(
+        Consent.patient_id == patient_id,
+        Consent.doctor_id == doctor_user_id,
+        Consent.record_scope == "EXTRA",
+        Consent.status == "ACTIVE",
+        Consent.end_time.isnot(None),
+        Consent.end_time > now_beijing(),
+    ).first() is not None
+
+
 @router.get("/overview")
 def get_admin_overview(
     current_user: User = Depends(require_roles("ADMIN")),
@@ -368,6 +379,12 @@ def assign_patient_to_doctor(
     patient = db.get(Patient, payload.patient_id)
     if patient is None:
         raise HTTPException(status_code=404, detail="Patient not found")
+
+    if _has_active_full_consent(db, patient_id=patient.id, doctor_user_id=doctor_user.id):
+        raise HTTPException(
+            status_code=400,
+            detail="Full access is already active; default assignment is not needed",
+        )
 
     consent = db.query(Consent).filter(
         Consent.doctor_id == doctor_user.id,

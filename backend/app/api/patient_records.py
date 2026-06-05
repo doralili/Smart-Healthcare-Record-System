@@ -46,6 +46,29 @@ def consent_display_status(consent: Consent) -> str:
     return consent.status
 
 
+def consent_priority(consent: Consent) -> tuple[int, int]:
+    status_rank = {
+        "ACTIVE": 4,
+        "PENDING": 3,
+        "REJECTED": 2,
+        "REVOKED": 1,
+        "EXPIRED": 0,
+    }.get(consent_display_status(consent), 0)
+    scope_rank = {"EXTRA": 2, "DEFAULT": 1}.get(consent.record_scope, 0)
+    return status_rank, scope_rank
+
+
+def has_active_full_consent(db: Session, *, patient_id: int, doctor_user_id: int) -> bool:
+    return db.query(Consent).filter(
+        Consent.patient_id == patient_id,
+        Consent.doctor_id == doctor_user_id,
+        Consent.record_scope == "EXTRA",
+        Consent.status == "ACTIVE",
+        Consent.end_time.isnot(None),
+        Consent.end_time > now_beijing(),
+    ).first() is not None
+
+
 # ========== 具体路径的路由（必须放在动态路由之前） ==========
 
 @router.get("/available-doctors")
@@ -120,6 +143,12 @@ def select_default_doctor(
     doctor_profile = db.query(Doctor).filter(Doctor.user_id == doctor_user.id).first()
     if doctor_profile is None or not doctor_profile.verified:
         raise HTTPException(status_code=400, detail="Doctor is not approved")
+
+    if has_active_full_consent(db, patient_id=patient.id, doctor_user_id=doctor_user.id):
+        raise HTTPException(
+            status_code=400,
+            detail="Full access is already active; default access is covered",
+        )
 
     consent = (
         db.query(Consent)
@@ -227,9 +256,17 @@ def get_my_doctors(
         Consent.patient_id == patient.id,
         Consent.status == "ACTIVE"
     ).all()
+
+    best_consents_by_doctor: dict[int, Consent] = {}
+    for consent in active_consents:
+        if consent_display_status(consent) != "ACTIVE":
+            continue
+        current_best = best_consents_by_doctor.get(consent.doctor_id)
+        if current_best is None or consent_priority(consent) > consent_priority(current_best):
+            best_consents_by_doctor[consent.doctor_id] = consent
     
     result = []
-    for c in active_consents:
+    for c in best_consents_by_doctor.values():
         doctor = db.query(User).filter(User.id == c.doctor_id).first()
         result.append({
             "consent_id": c.id,
@@ -259,12 +296,37 @@ def approve_consent(
     
     if consent.status != "PENDING":
         raise HTTPException(status_code=400, detail="Already processed")
+
+    if consent.record_scope == "DEFAULT" and has_active_full_consent(
+        db,
+        patient_id=consent.patient_id,
+        doctor_user_id=consent.doctor_id,
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Full access is already active; default approval is not needed",
+        )
     
     consent.status = "ACTIVE"
     now = now_beijing()
     consent.start_time = now
     consent.approved_at = now
     consent.end_time = now + timedelta(days=CONSENT_VALID_DAYS)
+
+    if consent.record_scope == "EXTRA":
+        db.query(Consent).filter(
+            Consent.patient_id == consent.patient_id,
+            Consent.doctor_id == consent.doctor_id,
+            Consent.record_scope == "DEFAULT",
+            Consent.status == "ACTIVE",
+            Consent.id != consent.id,
+        ).update(
+            {
+                "status": "REVOKED",
+                "revoked_at": now,
+            },
+            synchronize_session=False,
+        )
     write_audit_log(
         db,
         action="CONSENT_APPROVE",
