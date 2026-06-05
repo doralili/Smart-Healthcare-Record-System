@@ -41,6 +41,11 @@ export interface AvailableDoctor {
   default_consent_status: string
   default_consent_id: number | null
   default_consent_end_time: string | null
+  access_status: string
+  access_scope: string | null
+  access_consent_id: number | null
+  access_end_time: string | null
+  can_select_default: boolean
 }
 
 export interface PendingConsentResponse {

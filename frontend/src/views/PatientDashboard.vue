@@ -219,6 +219,34 @@ const filteredAvailableDoctors = computed(() => {
   );
 });
 
+function canSelectDefaultDoctor(doctor: AvailableDoctor) {
+  if (doctor.can_select_default === false) {
+    return false;
+  }
+
+  return !(doctor.access_status === 'ACTIVE' && ['DEFAULT', 'EXTRA'].includes(doctor.access_scope || ''));
+}
+
+function doctorAccessTagType(doctor: AvailableDoctor) {
+  if (doctor.access_status === 'ACTIVE') {
+    return doctor.access_scope === 'EXTRA' ? 'success' : 'primary';
+  }
+
+  return doctor.access_status === 'NONE' ? 'info' : 'warning';
+}
+
+function doctorAccessLabel(doctor: AvailableDoctor) {
+  if (doctor.access_status === 'ACTIVE' && doctor.access_scope === 'EXTRA') {
+    return 'Full Access';
+  }
+
+  if (doctor.access_status === 'ACTIVE' && doctor.access_scope === 'DEFAULT') {
+    return 'Default Access';
+  }
+
+  return doctor.access_status || 'NONE';
+}
+
 const unlinkedClinicalRows = computed(() => {
   if (!record.value) {
     return [];
@@ -959,6 +987,11 @@ async function handleRevoke(consentId: number, doctorName: string) {
 // 鏂板锛氭偅鑰呴€夋嫨榛樿鍖荤敓
 async function handleSelectDoctor(doctor: AvailableDoctor) {
   if (!auth.token) return;
+  if (!canSelectDefaultDoctor(doctor)) {
+    ElMessage.warning("This doctor already has active access");
+    return;
+  }
+
   selectingDoctorId.value = doctor.doctor_user_id;
   try {
     await selectDefaultDoctor(auth.token, doctor.doctor_user_id);
@@ -1350,19 +1383,19 @@ onUnmounted(() => {
                   {{ row.license_no || "Not recorded" }}
                 </template>
               </el-table-column>
-              <el-table-column label="Default Access" width="150">
+              <el-table-column label="Current Access" width="150">
                 <template #default="{ row }">
                   <el-tag
-                    :type="row.default_consent_status === 'ACTIVE' ? 'success' : row.default_consent_status === 'NONE' ? 'info' : 'warning'"
+                    :type="doctorAccessTagType(row)"
                     size="small"
                   >
-                    {{ row.default_consent_status }}
+                    {{ doctorAccessLabel(row) }}
                   </el-tag>
                 </template>
               </el-table-column>
               <el-table-column label="Expires At" width="180">
                 <template #default="{ row }">
-                  {{ row.default_consent_end_time ? formatDateTime(row.default_consent_end_time) : "Not selected" }}
+                  {{ row.access_end_time ? formatDateTime(row.access_end_time) : "Not selected" }}
                 </template>
               </el-table-column>
               <el-table-column label="Action" width="150">
@@ -1370,11 +1403,11 @@ onUnmounted(() => {
                   <el-button
                     type="primary"
                     size="small"
-                    :disabled="row.default_consent_status === 'ACTIVE'"
+                    :disabled="!canSelectDefaultDoctor(row)"
                     :loading="selectingDoctorId === row.doctor_user_id"
                     @click="handleSelectDoctor(row)"
                   >
-                    {{ row.default_consent_status === 'ACTIVE' ? 'Selected' : 'Choose' }}
+                    Choose
                   </el-button>
                 </template>
               </el-table-column>

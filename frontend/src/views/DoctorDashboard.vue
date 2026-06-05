@@ -663,8 +663,8 @@ onMounted(() => {
 
         <h3 class="font-bold mb-2">Diagnosis List</h3>
         <el-table :data="currentRecord.diagnosis_list || []" border>
-          <el-table-column prop="name" label="Diagnosis" />
           <el-table-column prop="department" label="Department" width="180" />
+          <el-table-column prop="name" label="Diagnosis" />
           <el-table-column prop="status" label="Status" width="100" />
           <el-table-column prop="date" label="Date" width="120" />
         </el-table>

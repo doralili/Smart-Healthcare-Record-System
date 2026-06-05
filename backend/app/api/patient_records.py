@@ -71,6 +71,26 @@ def has_active_full_consent(db: Session, *, patient_id: int, doctor_user_id: int
 
 # ========== 具体路径的路由（必须放在动态路由之前） ==========
 
+def has_active_default_consent(db: Session, *, patient_id: int, doctor_user_id: int) -> bool:
+    return db.query(Consent).filter(
+        Consent.patient_id == patient_id,
+        Consent.doctor_id == doctor_user_id,
+        Consent.record_scope == "DEFAULT",
+        Consent.status == "ACTIVE",
+        Consent.end_time.isnot(None),
+        Consent.end_time > now_beijing(),
+    ).first() is not None
+
+
+def best_consents_by_doctor(consents: list[Consent]) -> dict[int, Consent]:
+    result: dict[int, Consent] = {}
+    for consent in consents:
+        current_best = result.get(consent.doctor_id)
+        if current_best is None or consent_priority(consent) > consent_priority(current_best):
+            result[consent.doctor_id] = consent
+    return result
+
+
 @router.get("/available-doctors")
 def get_available_doctors(
     department: str = "",
@@ -94,34 +114,44 @@ def get_available_doctors(
 
     doctors = doctor_query.order_by(Doctor.department.asc(), Doctor.name.asc()).all()
 
-    default_consents = (
+    consents = (
         db.query(Consent)
         .filter(Consent.patient_id == patient.id)
-        .filter(Consent.record_scope == "DEFAULT")
+        .filter(Consent.record_scope.in_(["DEFAULT", "EXTRA"]))
         .all()
     )
-    consent_map = {consent.doctor_id: consent for consent in default_consents}
+    consent_map = best_consents_by_doctor(consents)
+    default_consent_map = best_consents_by_doctor(
+        [consent for consent in consents if consent.record_scope == "DEFAULT"]
+    )
+
+    def doctor_payload(user: User, doctor: Doctor) -> dict:
+        best_consent = consent_map.get(user.id)
+        default_consent = default_consent_map.get(user.id)
+        access_status = consent_display_status(best_consent) if best_consent else "NONE"
+        access_scope = best_consent.record_scope if best_consent else None
+        has_blocking_access = access_status == "ACTIVE" and access_scope in {"DEFAULT", "EXTRA"}
+
+        return {
+            "doctor_user_id": user.id,
+            "username": user.username,
+            "name": doctor.name,
+            "department": doctor.department,
+            "license_no": doctor.license_no,
+            "default_consent_status": consent_display_status(default_consent)
+            if default_consent
+            else "NONE",
+            "default_consent_id": default_consent.id if default_consent else None,
+            "default_consent_end_time": default_consent.end_time if default_consent else None,
+            "access_status": access_status,
+            "access_scope": access_scope,
+            "access_consent_id": best_consent.id if best_consent else None,
+            "access_end_time": best_consent.end_time if best_consent else None,
+            "can_select_default": not has_blocking_access,
+        }
 
     return {
-        "doctors": [
-            {
-                "doctor_user_id": user.id,
-                "username": user.username,
-                "name": doctor.name,
-                "department": doctor.department,
-                "license_no": doctor.license_no,
-                "default_consent_status": consent_display_status(consent_map[user.id])
-                if user.id in consent_map
-                else "NONE",
-                "default_consent_id": consent_map[user.id].id
-                if user.id in consent_map
-                else None,
-                "default_consent_end_time": consent_map[user.id].end_time
-                if user.id in consent_map
-                else None,
-            }
-            for user, doctor in doctors
-        ],
+        "doctors": [doctor_payload(user, doctor) for user, doctor in doctors],
     }
 
 
@@ -148,6 +178,11 @@ def select_default_doctor(
         raise HTTPException(
             status_code=400,
             detail="Full access is already active; default access is covered",
+        )
+    if has_active_default_consent(db, patient_id=patient.id, doctor_user_id=doctor_user.id):
+        raise HTTPException(
+            status_code=400,
+            detail="Default access is already active for this doctor",
         )
 
     consent = (
