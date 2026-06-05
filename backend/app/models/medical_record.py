@@ -13,3 +13,5 @@ class MedicalRecord(Base):
     encrypted_data = Column(Text, nullable=False)
     nonce = Column(String(255), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=True)
+    updated_by_doctor_id = Column(Integer, ForeignKey("users.id"), nullable=True)

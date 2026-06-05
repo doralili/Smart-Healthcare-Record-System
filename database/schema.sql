@@ -22,7 +22,7 @@ CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 
 CREATE TABLE IF NOT EXISTS patients (
     id SERIAL PRIMARY KEY,
-    user_id INTEGER NULL,
+    user_id INTEGER NULL UNIQUE,
     synthea_patient_id VARCHAR(100) NOT NULL UNIQUE,
     full_name VARCHAR(100) NOT NULL,
     gender VARCHAR(20) NULL,
@@ -36,7 +36,9 @@ CREATE TABLE IF NOT EXISTS patients (
         REFERENCES users(id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_patients_user_id ON patients(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_patients_user_id_unique
+    ON patients(user_id)
+    WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_patients_synthea_patient_id ON patients(synthea_patient_id);
 
 CREATE TABLE IF NOT EXISTS medical_records (
@@ -47,14 +49,20 @@ CREATE TABLE IF NOT EXISTS medical_records (
     encrypted_data TEXT NOT NULL,
     nonce VARCHAR(255) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NULL,
+    updated_by_doctor_id INTEGER NULL,
 
     CONSTRAINT fk_medical_records_patient
         FOREIGN KEY (patient_id)
-        REFERENCES patients(id)
+        REFERENCES patients(id),
+    CONSTRAINT fk_medical_records_updated_by_doctor
+        FOREIGN KEY (updated_by_doctor_id)
+        REFERENCES users(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_medical_records_patient_id ON medical_records(patient_id);
 CREATE INDEX IF NOT EXISTS idx_medical_records_source ON medical_records(source);
+CREATE INDEX IF NOT EXISTS idx_medical_records_updated_by_doctor_id ON medical_records(updated_by_doctor_id);
 
 CREATE TABLE IF NOT EXISTS doctors (
     id SERIAL PRIMARY KEY,

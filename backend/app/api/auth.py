@@ -1,4 +1,7 @@
+from uuid import uuid4
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -6,6 +9,7 @@ from app.core.deps import get_current_user
 from app.core.security import create_access_token, hash_password, verify_password
 from app.core.timezone import now_beijing
 from app.db.session import get_db
+from app.models.patient import Patient
 from app.models.user import User
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
 from app.services.audit_service import request_audit_context, write_audit_log
@@ -47,19 +51,38 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
         created_at=now_beijing(),
     )
 
-    db.add(user)
-    db.flush()
-    write_audit_log(
-        db,
-        action="PATIENT_REGISTER",
-        actor=user,
-        target_type="user",
-        target_id=user.id,
-        outcome="SUCCESS",
-        detail="Patient self-registration",
-        **request_audit_context(request),
-    )
-    db.commit()
+    try:
+        db.add(user)
+        db.flush()
+
+        patient = Patient(
+            user_id=user.id,
+            synthea_patient_id=f"SELF-{uuid4().hex}",
+            full_name=username,
+            created_at=now_beijing(),
+        )
+        db.add(patient)
+        db.flush()
+
+        write_audit_log(
+            db,
+            action="PATIENT_REGISTER",
+            actor=user,
+            target_type="user",
+            target_id=user.id,
+            patient_id=patient.id,
+            outcome="SUCCESS",
+            detail="Patient self-registration with profile creation",
+            **request_audit_context(request),
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username or patient profile already exists",
+        ) from exc
+
     db.refresh(user)
 
     return UserResponse(

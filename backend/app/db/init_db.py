@@ -86,6 +86,10 @@ def ensure_audit_schema() -> None:
         "CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_user_id ON audit_logs(actor_user_id)",
         "CREATE INDEX IF NOT EXISTS idx_audit_logs_patient_id ON audit_logs(patient_id)",
         "CREATE INDEX IF NOT EXISTS idx_audit_logs_doctor_id ON audit_logs(doctor_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_patients_user_id_unique "
+        "ON patients(user_id) WHERE user_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS idx_medical_records_updated_by_doctor_id "
+        "ON medical_records(updated_by_doctor_id)",
     ]
 
     with engine.begin() as connection:
@@ -100,6 +104,23 @@ def ensure_audit_schema() -> None:
         ).first()
         if has_doctor_note is None:
             connection.execute(text("ALTER TABLE doctors ADD COLUMN note TEXT NULL"))
+        for column_name, column_type in [
+            ("updated_at", "TIMESTAMPTZ NULL"),
+            ("updated_by_doctor_id", "INTEGER NULL"),
+        ]:
+            has_column = connection.execute(
+                text(
+                    "SELECT 1 FROM pg_attribute "
+                    "WHERE attrelid = 'medical_records'::regclass "
+                    "AND attname = :column_name "
+                    "AND NOT attisdropped"
+                ),
+                {"column_name": column_name},
+            ).first()
+            if has_column is None:
+                connection.execute(
+                    text(f"ALTER TABLE medical_records ADD COLUMN {column_name} {column_type}")
+                )
         connection.execute(text(create_consents))
         connection.execute(
             text(

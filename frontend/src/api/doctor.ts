@@ -36,3 +36,7 @@ export function submitAccessRequest(data: any) {
 export function getPatientRecord(patientId: number) {
   return api.get<unknown, { medical_record: any }>(`/api/doctor/patients/${patientId}/records`)
 }
+
+export function updatePatientRecord(patientId: number, recordId: number, record: Record<string, unknown>) {
+  return api.put(`/api/doctor/patients/${patientId}/records/${recordId}`, { record })
+}

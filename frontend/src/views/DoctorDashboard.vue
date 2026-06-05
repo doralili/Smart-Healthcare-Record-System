@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import DashboardLayout from "../layouts/DashboardLayout.vue"
-import { getMyPatients, submitAccessRequest, getPatientRecord } from '../api/doctor'
+import { getMyPatients, submitAccessRequest, getPatientRecord, updatePatientRecord } from '../api/doctor'
 import { ElMessage } from '../utils/message'
 
 const activeTab = ref('patients')
@@ -13,6 +13,10 @@ const showSignInAlert = ref(true)
 // 弹窗相关
 const recordDialogVisible = ref(false)
 const currentRecord = ref<any>(null)
+const currentPatient = ref<any>(null)
+const editDialogVisible = ref(false)
+const recordEditText = ref('')
+const savingRecord = ref(false)
 const applyDialogVisible = ref(false)
 const applyForm = ref({
   patient_id: 0,
@@ -90,10 +94,48 @@ const searchPatients = async () => {
 const openRecord = async (patient: any) => {
   try {
     const res = await getPatientRecord(patient.id)
+    currentPatient.value = patient
     currentRecord.value = res.medical_record
     recordDialogVisible.value = true
   } catch (err) {
     ElMessage.error('Failed to load medical record')
+  }
+}
+
+const openEditRecord = () => {
+  if (!currentRecord.value?.record_id || !currentRecord.value?.raw_record) {
+    ElMessage.warning('Full access medical record is required before editing')
+    return
+  }
+  recordEditText.value = JSON.stringify(currentRecord.value.raw_record, null, 2)
+  editDialogVisible.value = true
+}
+
+const saveRecordEdit = async () => {
+  if (!currentPatient.value || !currentRecord.value?.record_id) {
+    ElMessage.error('No medical record selected')
+    return
+  }
+
+  let parsedRecord: Record<string, unknown>
+  try {
+    parsedRecord = JSON.parse(recordEditText.value)
+  } catch {
+    ElMessage.error('Record JSON is invalid')
+    return
+  }
+
+  savingRecord.value = true
+  try {
+    await updatePatientRecord(currentPatient.value.id, currentRecord.value.record_id, parsedRecord)
+    ElMessage.success('Medical record updated')
+    editDialogVisible.value = false
+    await openRecord(currentPatient.value)
+  } catch (err: any) {
+    const errorMsg = err.response?.data?.detail || 'Failed to update medical record'
+    ElMessage.error(errorMsg)
+  } finally {
+    savingRecord.value = false
   }
 }
 
@@ -548,6 +590,25 @@ onMounted(() => {
     <!-- View Record Dialog -->
     <el-dialog v-model="recordDialogVisible" title="Patient Medical Record" width="80%">
       <div v-if="currentRecord">
+        <div class="record-dialog-actions">
+          <div class="record-trace">
+            <span>Record ID: {{ currentRecord.record_id || 'None' }}</span>
+            <span v-if="currentRecord.updated_at">
+              Last updated: {{ formatDate(currentRecord.updated_at) }}
+            </span>
+            <span v-if="currentRecord.updated_by_doctor_id">
+              Updated by doctor user ID: {{ currentRecord.updated_by_doctor_id }}
+            </span>
+          </div>
+          <el-button
+            v-if="currentRecord.record_id && currentRecord.raw_record"
+            type="warning"
+            @click="openEditRecord"
+          >
+            Edit Record
+          </el-button>
+        </div>
+
         <el-descriptions title="Basic Info" border :column="2" class="mb-4">
           <el-descriptions-item label="Name">{{ currentRecord.name }}</el-descriptions-item>
           <el-descriptions-item label="Gender">{{ currentRecord.gender }}</el-descriptions-item>
@@ -591,6 +652,30 @@ onMounted(() => {
       </div>
     </el-dialog>
 
+    <!-- Edit Record Dialog -->
+    <el-dialog v-model="editDialogVisible" title="Edit Medical Record JSON" width="76%">
+      <el-alert
+        title="This will overwrite the encrypted medical record. The system audits permission and stores updated_at / updated_by_doctor_id, but does not store a content diff."
+        type="warning"
+        show-icon
+        :closable="false"
+        class="mb-4"
+      />
+      <el-input
+        v-model="recordEditText"
+        type="textarea"
+        :rows="20"
+        spellcheck="false"
+        class="record-json-editor"
+      />
+      <template #footer>
+        <el-button @click="editDialogVisible = false">Cancel</el-button>
+        <el-button type="primary" :loading="savingRecord" @click="saveRecordEdit">
+          Save Overwrite
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- Apply Access Dialog -->
     <el-dialog v-model="applyDialogVisible" title="Apply for Medical Record Access">
       <el-form :model="applyForm" label-width="120px">
@@ -626,6 +711,26 @@ onMounted(() => {
 .mb-6 { margin-bottom: 24px; }
 .font-bold { font-weight: bold; }
 .text-muted { color: #909399; }
+
+.record-dialog-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.record-trace {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #606266;
+  font-size: 13px;
+}
+
+.record-json-editor {
+  font-family: Consolas, Monaco, monospace;
+}
 
 .dashboard-alert-fade-leave-active {
   transition: opacity 0.4s ease, transform 0.4s ease;

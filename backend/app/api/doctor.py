@@ -1,16 +1,25 @@
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.core.deps import get_db, get_current_user, require_roles
 from app.core.timezone import BEIJING_TZ, now_beijing
 from app.models.user import User
 from app.models.doctor import Doctor
 from app.models.consent import Consent
+from app.models.medical_record import MedicalRecord
 from app.models.patient import Patient
 from app.schemas.doctor import AccessRequestCreate
 from app.services.masking import mask_record_by_scope
 from app.services.audit_service import request_audit_context, write_audit_log
+from app.services.crypto_service import MedicalRecordCryptoError, encrypt_record_json
 
 router = APIRouter(prefix="/api/doctor", tags=["医生业务模块"])
+
+
+class MedicalRecordUpdateRequest(BaseModel):
+    record: dict[str, Any]
 
 
 def ensure_doctor_approved(db: Session, user: User) -> None:
@@ -53,6 +62,27 @@ def consent_priority(consent: Consent) -> tuple[int, int]:
     }.get(consent_display_status(consent), 0)
     scope_rank = {"EXTRA": 2, "DEFAULT": 1}.get(consent.record_scope, 0)
     return status_rank, scope_rank
+
+
+def get_valid_consent(
+    db: Session,
+    *,
+    patient_id: int,
+    doctor_user_id: int,
+    required_scope: str | None = None,
+) -> Consent | None:
+    query = db.query(Consent).filter(
+        Consent.patient_id == patient_id,
+        Consent.doctor_id == doctor_user_id,
+        Consent.status == "ACTIVE",
+        Consent.end_time.isnot(None),
+        Consent.end_time > now_beijing(),
+    )
+
+    if required_scope is not None:
+        query = query.filter(Consent.record_scope == required_scope)
+
+    return query.order_by(Consent.record_scope.desc(), Consent.end_time.desc()).first()
 
 # 获取名下授权患者列表
 @router.get("/my-patients")
@@ -165,13 +195,11 @@ def get_patient_mask_record(
     from app.models.patient import Patient
     
     # 1. 检查有效授权
-    valid_consent = db.query(Consent).filter(
-        Consent.patient_id == patient_id,
-        Consent.doctor_id == current_user.id,
-        Consent.status == "ACTIVE",
-        Consent.end_time.isnot(None),
-        Consent.end_time > now_beijing(),
-    ).order_by(Consent.record_scope.desc(), Consent.end_time.desc()).first()
+    valid_consent = get_valid_consent(
+        db,
+        patient_id=patient_id,
+        doctor_user_id=current_user.id,
+    )
 
     # 2. 记录审计日志
     log = AccessLog(
@@ -278,6 +306,7 @@ def get_patient_mask_record(
     if scope == "DEFAULT":
         # 默认范围：基本信息 + 诊断列表
         result = {
+            "record_id": medical_record.id if medical_record else None,
             "name": patient.full_name,
             "gender": patient.gender,
             "phone": mask_phone(patient.phone),
@@ -289,11 +318,14 @@ def get_patient_mask_record(
             "medications": "Limited - apply full access to view",
             "procedures": "Limited - apply full access to view",
             "diagnosis_list": diagnoses_list,
+            "updated_at": medical_record.updated_at if medical_record else None,
+            "updated_by_doctor_id": medical_record.updated_by_doctor_id if medical_record else None,
             "message": "Default scope - only basic info and diagnoses are shown"
         }
     else:
         # 额外授权范围：完整信息
         result = {
+            "record_id": medical_record.id if medical_record else None,
             "name": patient.full_name,
             "gender": patient.gender,
             "phone": patient.phone,
@@ -305,10 +337,96 @@ def get_patient_mask_record(
             "medications": medications_list,
             "procedures": procedures_list,
             "diagnosis_list": diagnoses_list,
+            "raw_record": clinical_data,
+            "updated_at": medical_record.updated_at if medical_record else None,
+            "updated_by_doctor_id": medical_record.updated_by_doctor_id if medical_record else None,
             "message": "Full access - all medical records are shown"
         }
     
     return {"medical_record": result}
+
+
+@router.put("/patients/{patient_id}/records/{record_id}")
+def update_patient_record(
+    patient_id: int,
+    record_id: int,
+    payload: MedicalRecordUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _=Depends(require_roles("DOCTOR")),
+):
+    ensure_doctor_approved(db, current_user)
+
+    patient = db.query(Patient).filter(Patient.id == patient_id).first()
+    if patient is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    record = db.query(MedicalRecord).filter(
+        MedicalRecord.id == record_id,
+        MedicalRecord.patient_id == patient_id,
+    ).first()
+    if record is None:
+        raise HTTPException(status_code=404, detail="Medical record not found")
+
+    valid_consent = get_valid_consent(
+        db,
+        patient_id=patient_id,
+        doctor_user_id=current_user.id,
+        required_scope="EXTRA",
+    )
+    if valid_consent is None:
+        write_audit_log(
+            db,
+            action="DOCTOR_RECORD_EDIT_DENIED",
+            actor=current_user,
+            target_type="medical_record",
+            target_id=record_id,
+            doctor_id=current_user.id,
+            patient_id=patient_id,
+            outcome="DENIED",
+            detail="Doctor record overwrite denied: no active EXTRA consent",
+            **request_audit_context(request),
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=403,
+            detail="Full access permission is required to edit this medical record",
+        )
+
+    write_audit_log(
+        db,
+        action="DOCTOR_RECORD_EDIT_AUTHORIZED",
+        actor=current_user,
+        target_type="medical_record",
+        target_id=record.id,
+        doctor_id=current_user.id,
+        patient_id=patient_id,
+        consent_id=valid_consent.id,
+        record_scope=valid_consent.record_scope,
+        outcome="SUCCESS",
+        detail="Doctor permission checked before record overwrite",
+        **request_audit_context(request),
+    )
+
+    try:
+        encrypted_data, nonce = encrypt_record_json(payload.record)
+    except MedicalRecordCryptoError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to encrypt medical record") from exc
+
+    record.encrypted_data = encrypted_data
+    record.nonce = nonce
+    record.updated_at = now_beijing()
+    record.updated_by_doctor_id = current_user.id
+    db.commit()
+
+    return {
+        "record_id": record.id,
+        "patient_id": patient_id,
+        "updated_at": record.updated_at,
+        "updated_by_doctor_id": record.updated_by_doctor_id,
+    }
 
 
 @router.get("/search-patients")
