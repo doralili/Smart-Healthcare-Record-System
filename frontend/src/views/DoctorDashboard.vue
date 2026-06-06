@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import DashboardLayout from "../layouts/DashboardLayout.vue"
-import { getMyPatients, getDoctorProfile, submitAccessRequest, getPatientRecord, updatePatientRecord } from '../api/doctor'
+import { getMyPatients, getDoctorProfile, submitAccessRequest, getPatientRecord, updatePatientRecord, addPatientRecord } from '../api/doctor'
 import { ElMessage } from '../utils/message'
 
 const activeTab = ref('patients')
@@ -19,7 +19,6 @@ const recordDialogVisible = ref(false)
 const currentRecord = ref<any>(null)
 const currentPatient = ref<any>(null)
 const editDialogVisible = ref(false)
-const recordEditText = ref('')
 const savingRecord = ref(false)
 const applyDialogVisible = ref(false)
 const applyForm = ref({
@@ -29,10 +28,84 @@ const applyForm = ref({
   reason: ''
 })
 
+// 诊断详情弹窗
+const diagnosisDetailVisible = ref(false)
+const selectedDiagnosis = ref<any>(null)
+
+// 新增病历表单
+const newRecordForm = ref({
+  encounters: [],
+  conditions: [],
+  observations: [],
+  medications: [],
+  procedures: []
+})
+
+// 全局科室
+const globalDepartment = ref('')
+
 // 日期格式化函数
 const formatDate = (dateStr: string) => {
   if (!dateStr) return ''
   return dateStr.split('T')[0]
+}
+
+// 格式化日期时间（用于详情弹窗）
+const formatDateTime = (dateStr: string) => {
+  if (!dateStr) return 'Not recorded'
+  const date = new Date(dateStr)
+  if (isNaN(date.getTime())) return dateStr
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+// 获取诊断相关的就诊记录（按日期匹配）
+const getRelatedEncounters = (diagnosis: any) => {
+  if (!currentRecord.value?.raw_record?.encounters) return []
+  const diagnosisDate = diagnosis.date
+  if (!diagnosisDate) return []
+  return currentRecord.value.raw_record.encounters.filter((enc: any) => {
+    const encDate = enc.start?.split('T')[0]
+    return encDate === diagnosisDate
+  })
+}
+
+// 获取诊断相关的用药记录（按日期匹配）
+const getRelatedMedications = (diagnosis: any) => {
+  if (!currentRecord.value?.raw_record?.medications) return []
+  const diagnosisDate = diagnosis.date
+  if (!diagnosisDate) return []
+  return currentRecord.value.raw_record.medications.filter((med: any) => {
+    const medDate = med.authored_on?.split('T')[0]
+    return medDate === diagnosisDate
+  })
+}
+
+// 获取诊断相关的检查结果（按日期匹配）
+const getRelatedObservations = (diagnosis: any) => {
+  if (!currentRecord.value?.raw_record?.observations) return []
+  const diagnosisDate = diagnosis.date
+  if (!diagnosisDate) return []
+  return currentRecord.value.raw_record.observations.filter((obs: any) => {
+    const obsDate = obs.effective_datetime?.split('T')[0]
+    return obsDate === diagnosisDate
+  })
+}
+
+// 获取诊断相关的手术记录（按日期匹配）
+const getRelatedProcedures = (diagnosis: any) => {
+  if (!currentRecord.value?.raw_record?.procedures) return []
+  const diagnosisDate = diagnosis.date
+  if (!diagnosisDate) return []
+  return currentRecord.value.raw_record.procedures.filter((proc: any) => {
+    const procDate = proc.performed_datetime?.split('T')[0]
+    return procDate === diagnosisDate
+  })
 }
 
 // 按状态和范围分组
@@ -106,6 +179,11 @@ const openRecord = async (patient: any) => {
   }
 }
 
+const viewDiagnosisDetail = (diagnosis: any) => {
+  selectedDiagnosis.value = diagnosis
+  diagnosisDetailVisible.value = true
+}
+
 const loadDoctorProfile = async () => {
   try {
     doctorProfile.value = await getDoctorProfile()
@@ -114,37 +192,138 @@ const loadDoctorProfile = async () => {
   }
 }
 
-const openEditRecord = () => {
-  if (!currentRecord.value?.record_id || !currentRecord.value?.raw_record) {
-    ElMessage.warning('Full access medical record is required before editing')
-    return
+// 新增病历表单操作
+const addEncounter = () => {
+  newRecordForm.value.encounters.push({
+    type: '',
+    class: '',
+    status: 'finished',
+    start: new Date().toISOString().slice(0, 19)
+  })
+}
+
+const removeEncounter = (index: number) => {
+  newRecordForm.value.encounters.splice(index, 1)
+}
+
+const addCondition = () => {
+  newRecordForm.value.conditions.push({
+    code: '',
+    clinical_status: 'active',
+    recorded_date: new Date().toISOString().slice(0, 10)
+  })
+}
+
+const removeCondition = (index: number) => {
+  newRecordForm.value.conditions.splice(index, 1)
+}
+
+const addObservation = () => {
+  newRecordForm.value.observations.push({
+    code: '',
+    value: '',
+    status: 'final',
+    effective_datetime: new Date().toISOString().slice(0, 19)
+  })
+}
+
+const removeObservation = (index: number) => {
+  newRecordForm.value.observations.splice(index, 1)
+}
+
+const addMedication = () => {
+  newRecordForm.value.medications.push({
+    medication: '',
+    status: 'active',
+    authored_on: new Date().toISOString().slice(0, 19),
+    stop_date: ''
+  })
+}
+
+const removeMedication = (index: number) => {
+  newRecordForm.value.medications.splice(index, 1)
+}
+
+const addProcedure = () => {
+  newRecordForm.value.procedures.push({
+    code: '',
+    status: 'completed',
+    performed_datetime: new Date().toISOString().slice(0, 19)
+  })
+}
+
+const removeProcedure = (index: number) => {
+  newRecordForm.value.procedures.splice(index, 1)
+}
+
+const resetNewRecordForm = () => {
+  newRecordForm.value = {
+    encounters: [],
+    conditions: [],
+    observations: [],
+    medications: [],
+    procedures: []
   }
-  recordEditText.value = JSON.stringify(currentRecord.value.raw_record, null, 2)
+  globalDepartment.value = ''
+}
+
+// 打开新增病历弹窗
+const openAddRecord = () => {
+  resetNewRecordForm()
+  addEncounter()
   editDialogVisible.value = true
 }
 
-const saveRecordEdit = async () => {
-  if (!currentPatient.value || !currentRecord.value?.record_id) {
-    ElMessage.error('No medical record selected')
+// 保存新记录
+const saveNewRecord = async () => {
+  if (!currentPatient.value) {
+    ElMessage.error('No patient selected')
     return
   }
 
-  let parsedRecord: Record<string, unknown>
-  try {
-    parsedRecord = JSON.parse(recordEditText.value)
-  } catch {
-    ElMessage.error('Record JSON is invalid')
+  if (!globalDepartment.value.trim()) {
+    ElMessage.warning('Please enter a department for this record')
+    return
+  }
+
+  // 为所有记录设置 department
+  for (const encounter of newRecordForm.value.encounters) {
+    encounter.department = globalDepartment.value
+  }
+  for (const condition of newRecordForm.value.conditions) {
+    condition.department = globalDepartment.value
+  }
+  for (const observation of newRecordForm.value.observations) {
+    observation.department = globalDepartment.value
+  }
+  for (const medication of newRecordForm.value.medications) {
+    medication.department = globalDepartment.value
+  }
+  for (const procedure of newRecordForm.value.procedures) {
+    procedure.department = globalDepartment.value
+  }
+
+  const hasData = 
+    newRecordForm.value.encounters.length > 0 ||
+    newRecordForm.value.conditions.length > 0 ||
+    newRecordForm.value.observations.length > 0 ||
+    newRecordForm.value.medications.length > 0 ||
+    newRecordForm.value.procedures.length > 0
+
+  if (!hasData) {
+    ElMessage.warning('Please add at least one medical record item')
     return
   }
 
   savingRecord.value = true
   try {
-    await updatePatientRecord(currentPatient.value.id, currentRecord.value.record_id, parsedRecord)
-    ElMessage.success('Medical record updated')
+    await addPatientRecord(currentPatient.value.id, newRecordForm.value)
+    ElMessage.success('New medical record added successfully')
     editDialogVisible.value = false
+    resetNewRecordForm()
     await openRecord(currentPatient.value)
   } catch (err: any) {
-    const errorMsg = err.response?.data?.detail || 'Failed to update medical record'
+    const errorMsg = err.response?.data?.detail || 'Failed to add medical record'
     ElMessage.error(errorMsg)
   } finally {
     savingRecord.value = false
@@ -221,7 +400,7 @@ onMounted(() => {
     </el-card>
 
     <el-tabs v-model="activeTab">
-      <!-- 我的病人列表 Tab - 5个分组 -->
+      <!-- 我的病人列表 Tab -->
       <el-tab-pane label="My Patients" name="patients">
         <!-- Full Access 分组 -->
         <div class="mb-6">
@@ -496,7 +675,7 @@ onMounted(() => {
 
         <el-table :data="searchResults" border stripe>
           <el-table-column prop="full_name" label="Patient Name" />
-          <el-table-column prop="gender" label="Gender"width="70" />
+          <el-table-column prop="gender" label="Gender" width="70" />
           <el-table-column label="Birth Date" width="120">
             <template #default="{ row }">
               {{ formatDate(row.birth_date) }}
@@ -526,77 +705,38 @@ onMounted(() => {
           </el-table-column>
           <el-table-column label="Action" width="300">
             <template #default="{ row }">
-              <!-- 已有 Full Access：不显示任何申请按钮 -->
               <span v-if="row.status === 'ACTIVE' && row.scope === 'EXTRA'" class="text-muted">
                 ✓ Full Access Already Granted
               </span>
-              
-              <!-- 已有 Default Access：只显示 Apply Full Access -->
               <div v-else-if="row.status === 'ACTIVE' && row.scope === 'DEFAULT'" style="display: flex; gap: 8px;">
-                <el-button
-                  type="success"
-                  size="small"
-                  @click="openApplyDialog(row, 'EXTRA')"
-                >
+                <el-button type="success" size="small" @click="openApplyDialog(row, 'EXTRA')">
                   Apply Full Access
                 </el-button>
               </div>
-              
-              <!-- 待审批：显示等待中 -->
               <span v-else-if="row.status === 'PENDING'" class="text-muted">
                 Request Pending
               </span>
-              
-              <!-- 已拒绝：显示重新申请按钮 -->
               <div v-else-if="row.status === 'REJECTED'" style="display: flex; gap: 8px;">
-                <el-button
-                  type="primary"
-                  size="small"
-                  @click="openApplyDialog(row, 'DEFAULT')"
-                >
+                <el-button type="primary" size="small" @click="openApplyDialog(row, 'DEFAULT')">
                   Re-apply Default
                 </el-button>
-                <el-button
-                  type="success"
-                  size="small"
-                  @click="openApplyDialog(row, 'EXTRA')"
-                >
+                <el-button type="success" size="small" @click="openApplyDialog(row, 'EXTRA')">
                   Re-apply Full Access
                 </el-button>
               </div>
-
-              <!-- 已过期：允许重新申请 -->
               <div v-else-if="row.status === 'EXPIRED'" style="display: flex; gap: 8px;">
-                <el-button
-                  type="primary"
-                  size="small"
-                  @click="openApplyDialog(row, 'DEFAULT')"
-                >
+                <el-button type="primary" size="small" @click="openApplyDialog(row, 'DEFAULT')">
                   Re-apply Default
                 </el-button>
-                <el-button
-                  type="success"
-                  size="small"
-                  @click="openApplyDialog(row, 'EXTRA')"
-                >
+                <el-button type="success" size="small" @click="openApplyDialog(row, 'EXTRA')">
                   Re-apply Full Access
                 </el-button>
               </div>
-              
-              <!-- 无任何授权：显示两个按钮 -->
               <div v-else style="display: flex; gap: 8px;">
-                <el-button
-                  type="primary"
-                  size="small"
-                  @click="openApplyDialog(row, 'DEFAULT')"
-                >
+                <el-button type="primary" size="small" @click="openApplyDialog(row, 'DEFAULT')">
                   Apply Default Access
                 </el-button>
-                <el-button
-                  type="success"
-                  size="small"
-                  @click="openApplyDialog(row, 'EXTRA')"
-                >
+                <el-button type="success" size="small" @click="openApplyDialog(row, 'EXTRA')">
                   Apply Full Access
                 </el-button>
               </div>
@@ -619,12 +759,8 @@ onMounted(() => {
               Updated by doctor user ID: {{ currentRecord.updated_by_doctor_id }}
             </span>
           </div>
-          <el-button
-            v-if="currentRecord.record_id && currentRecord.raw_record"
-            type="warning"
-            @click="openEditRecord"
-          >
-            Edit Record
+          <el-button type="warning" @click="openAddRecord">
+            Add New Record
           </el-button>
         </div>
 
@@ -639,58 +775,372 @@ onMounted(() => {
         <el-descriptions title="Summary" border :column="2" class="mb-4">
           <el-descriptions-item label="Visits">{{ currentRecord.visits }}</el-descriptions-item>
           <el-descriptions-item label="Diagnoses">{{ currentRecord.diagnoses }}</el-descriptions-item>
-          <el-descriptions-item label="Lab Results">
-            <span v-if="typeof currentRecord.lab_results === 'string'">
-              {{ currentRecord.lab_results }}
-            </span>
-            <span v-else>
-              <span v-for="(item, idx) in currentRecord.lab_results" :key="idx">
-                {{ item.test_name }}: {{ item.value }}<br />
-              </span>
-            </span>
-          </el-descriptions-item>
-          <el-descriptions-item label="Medications">
-            <span v-if="typeof currentRecord.medications === 'string'">
-              {{ currentRecord.medications }}
-            </span>
-            <span v-else>
-              <span v-for="(item, idx) in currentRecord.medications" :key="idx">
-                {{ item.name }}<br />
-              </span>
-            </span>
-          </el-descriptions-item>
+          <el-descriptions-item v-if="currentPatient?.scope === 'EXTRA'" label="Medications Count">{{ currentRecord.medications?.length || 0 }}</el-descriptions-item>
+          <el-descriptions-item v-if="currentPatient?.scope === 'EXTRA'" label="Procedures Count">{{ currentRecord.procedures?.length || 0 }}</el-descriptions-item>
         </el-descriptions>
 
         <h3 class="font-bold mb-2">Diagnosis List</h3>
         <el-table :data="currentRecord.diagnosis_list || []" border>
-          <el-table-column prop="department" label="Department" width="180" />
-          <el-table-column prop="name" label="Diagnosis" />
+          <el-table-column prop="department" label="Department" width="150" />
+          <el-table-column prop="name" label="Diagnosis" min-width="260" />
           <el-table-column prop="status" label="Status" width="100" />
           <el-table-column prop="date" label="Date" width="120" />
+          <el-table-column v-if="currentPatient?.scope === 'EXTRA'" label="Detail" width="80">
+            <template #default="{ row }">
+              <el-button type="primary" link size="small" @click="viewDiagnosisDetail(row)">
+                View
+              </el-button>
+            </template>
+          </el-table-column>
         </el-table>
+
+        <template v-if="currentPatient?.scope === 'EXTRA'">
+          <h3 class="font-bold mb-2">Medications</h3>
+          <el-table :data="currentRecord.medications || []" border class="mb-4">
+            <el-table-column prop="name" label="Medication" min-width="280" />
+            <el-table-column prop="status" label="Status" width="140" />
+            <el-table-column label="Prescribed At" width="190">
+              <template #default="{ row }">
+                {{ formatDate(row.start_date) }}
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <h3 class="font-bold mb-2">Procedures</h3>
+          <el-table :data="currentRecord.procedures || []" border class="mb-4">
+            <el-table-column prop="name" label="Procedure" min-width="280" />
+            <el-table-column prop="status" label="Status" width="140" />
+            <el-table-column label="Date" width="190">
+              <template #default="{ row }">
+                {{ formatDate(row.date) }}
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
       </div>
     </el-dialog>
 
-    <!-- Edit Record Dialog -->
-    <el-dialog v-model="editDialogVisible" title="Edit Medical Record JSON" width="76%">
+    <!-- 诊断详情弹窗 -->
+    <el-dialog v-model="diagnosisDetailVisible" :title="selectedDiagnosis?.name || 'Diagnosis Detail'" width="70%">
+      <div v-if="selectedDiagnosis && currentRecord?.raw_record">
+        <el-descriptions title="Diagnosis Information" border :column="2" class="mb-4">
+          <el-descriptions-item label="Diagnosis">{{ selectedDiagnosis.name }}</el-descriptions-item>
+          <el-descriptions-item label="Status">{{ selectedDiagnosis.status }}</el-descriptions-item>
+          <el-descriptions-item label="Recorded At">{{ formatDateTime(selectedDiagnosis.date) }}</el-descriptions-item>
+        </el-descriptions>
+
+        <h3 class="font-bold mb-2">Related Visits</h3>
+        <el-table :data="getRelatedEncounters(selectedDiagnosis)" border class="mb-4">
+          <el-table-column prop="type" label="Visit Type" min-width="220" />
+          <el-table-column prop="class" label="Class" width="130" />
+          <el-table-column prop="status" label="Status" width="140" />
+          <el-table-column label="Date" width="190">
+            <template #default="{ row }">
+              {{ formatDateTime(row.start) }}
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <h3 class="font-bold mb-2">Related Medications</h3>
+        <el-table :data="getRelatedMedications(selectedDiagnosis)" border class="mb-4">
+          <el-table-column prop="medication" label="Medication" min-width="280" />
+          <el-table-column prop="status" label="Status" width="140" />
+          <el-table-column label="Prescribed At" width="190">
+            <template #default="{ row }">
+              {{ formatDateTime(row.authored_on) }}
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <h3 class="font-bold mb-2">Related Lab / Vital Results</h3>
+        <el-table :data="getRelatedObservations(selectedDiagnosis)" border class="mb-4">
+          <el-table-column prop="code" label="Item" min-width="260" />
+          <el-table-column prop="value" label="Result" min-width="180" />
+          <el-table-column prop="status" label="Status" width="140" />
+          <el-table-column label="Date" width="190">
+            <template #default="{ row }">
+              {{ formatDateTime(row.effective_datetime) }}
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <h3 class="font-bold mb-2">Related Procedures</h3>
+        <el-table :data="getRelatedProcedures(selectedDiagnosis)" border class="mb-4">
+          <el-table-column prop="code" label="Procedure" min-width="280" />
+          <el-table-column prop="status" label="Status" width="140" />
+          <el-table-column label="Date" width="190">
+            <template #default="{ row }">
+              {{ formatDateTime(row.performed_datetime) }}
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <el-alert
+          v-if="getRelatedEncounters(selectedDiagnosis).length === 0 && 
+                 getRelatedMedications(selectedDiagnosis).length === 0 && 
+                 getRelatedObservations(selectedDiagnosis).length === 0 && 
+                 getRelatedProcedures(selectedDiagnosis).length === 0"
+          title="No related medical records found for this diagnosis"
+          type="info"
+          show-icon
+          :closable="false"
+        />
+      </div>
+    </el-dialog>
+
+    <!-- Add New Record Dialog -->
+    <el-dialog v-model="editDialogVisible" title="Add New Medical Record" width="90%">
       <el-alert
-        title="This will overwrite the encrypted medical record. The system audits permission and stores updated_at / updated_by_doctor_id, but does not store a content diff."
-        type="warning"
+        title="Add a new medical record. This will be appended to the patient's existing records."
+        type="info"
         show-icon
         :closable="false"
         class="mb-4"
       />
-      <el-input
-        v-model="recordEditText"
-        type="textarea"
-        :rows="20"
-        spellcheck="false"
-        class="record-json-editor"
-      />
+
+      <!-- 全局 Department 输入框 -->
+      <div class="form-section global-department">
+        <h3 class="section-title">Record Department</h3>
+        <el-input 
+          v-model="globalDepartment" 
+          placeholder="e.g., Cardiology, Internal Medicine, Surgery" 
+          style="width: 300px"
+        />
+      </div>
+
+      <div style="max-height: 70vh; overflow-y: auto; padding-right: 8px;">
+        <!-- 就诊信息 -->
+        <div class="form-section">
+          <h3 class="section-title">Visit Information</h3>
+          <el-table :data="newRecordForm.encounters" border style="width: 100%">
+            <el-table-column label="Visit Type" width="200">
+              <template #default="{ $index }">
+                <el-input v-model="newRecordForm.encounters[$index].type" placeholder="e.g., General examination" />
+              </template>
+            </el-table-column>
+            <el-table-column label="Class" width="150">
+              <template #default="{ $index }">
+                <el-input v-model="newRecordForm.encounters[$index].class" placeholder="e.g., AMB" />
+              </template>
+            </el-table-column>
+            <el-table-column label="Status" width="120">
+              <template #default="{ $index }">
+                <el-select v-model="newRecordForm.encounters[$index].status" placeholder="Status">
+                  <el-option label="Finished" value="finished" />
+                  <el-option label="In Progress" value="in-progress" />
+                  <el-option label="Planned" value="planned" />
+                </el-select>
+              </template>
+            </el-table-column>
+            <el-table-column label="Date" width="200">
+              <template #default="{ $index }">
+                <el-date-picker
+                  v-model="newRecordForm.encounters[$index].start"
+                  type="datetime"
+                  placeholder="Select date"
+                  format="YYYY-MM-DD HH:mm"
+                  value-format="YYYY-MM-DDTHH:mm:ss"
+                  style="width: 100%"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="Actions" width="80">
+              <template #default="{ $index }">
+                <el-button type="danger" size="small" @click="removeEncounter($index)">Remove</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-button type="primary" size="small" @click="addEncounter" class="mt-2">
+            + Add Visit
+          </el-button>
+        </div>
+
+        <!-- 诊断 -->
+        <div class="form-section">
+          <h3 class="section-title">Diagnoses</h3>
+          <el-table :data="newRecordForm.conditions" border style="width: 100%">
+            <el-table-column label="Diagnosis Code" min-width="300">
+              <template #default="{ $index }">
+                <el-input v-model="newRecordForm.conditions[$index].code" placeholder="e.g., Diabetes mellitus type 2" />
+              </template>
+            </el-table-column>
+            <el-table-column label="Clinical Status" width="140">
+              <template #default="{ $index }">
+                <el-select v-model="newRecordForm.conditions[$index].clinical_status">
+                  <el-option label="Active" value="active" />
+                  <el-option label="Resolved" value="resolved" />
+                  <el-option label="Inactive" value="inactive" />
+                </el-select>
+              </template>
+            </el-table-column>
+            <el-table-column label="Recorded Date" width="180">
+              <template #default="{ $index }">
+                <el-date-picker
+                  v-model="newRecordForm.conditions[$index].recorded_date"
+                  type="date"
+                  placeholder="Select date"
+                  format="YYYY-MM-DD"
+                  value-format="YYYY-MM-DD"
+                  style="width: 100%"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="Actions" width="80">
+              <template #default="{ $index }">
+                <el-button type="danger" size="small" @click="removeCondition($index)">Remove</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-button type="primary" size="small" @click="addCondition" class="mt-2">
+            + Add Diagnosis
+          </el-button>
+        </div>
+
+        <!-- 检查结果 -->
+        <div class="form-section">
+          <h3 class="section-title">Lab / Vital Results</h3>
+          <el-table :data="newRecordForm.observations" border style="width: 100%">
+            <el-table-column label="Test Name" min-width="250">
+              <template #default="{ $index }">
+                <el-input v-model="newRecordForm.observations[$index].code" placeholder="e.g., Blood Pressure" />
+              </template>
+            </el-table-column>
+            <el-table-column label="Value" width="200">
+              <template #default="{ $index }">
+                <el-input v-model="newRecordForm.observations[$index].value" placeholder="e.g., 120/80" />
+              </template>
+            </el-table-column>
+            <el-table-column label="Status" width="120">
+              <template #default="{ $index }">
+                <el-select v-model="newRecordForm.observations[$index].status">
+                  <el-option label="Final" value="final" />
+                  <el-option label="Preliminary" value="preliminary" />
+                  <el-option label="Corrected" value="corrected" />
+                </el-select>
+              </template>
+            </el-table-column>
+            <el-table-column label="Date" width="200">
+              <template #default="{ $index }">
+                <el-date-picker
+                  v-model="newRecordForm.observations[$index].effective_datetime"
+                  type="datetime"
+                  placeholder="Select date"
+                  format="YYYY-MM-DD HH:mm"
+                  value-format="YYYY-MM-DDTHH:mm:ss"
+                  style="width: 100%"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="Actions" width="80">
+              <template #default="{ $index }">
+                <el-button type="danger" size="small" @click="removeObservation($index)">Remove</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-button type="primary" size="small" @click="addObservation" class="mt-2">
+            + Add Lab Result
+          </el-button>
+        </div>
+
+        <!-- 用药 -->
+        <div class="form-section">
+          <h3 class="section-title">Medications</h3>
+          <el-table :data="newRecordForm.medications" border style="width: 100%">
+            <el-table-column label="Medication" min-width="250">
+              <template #default="{ $index }">
+                <el-input v-model="newRecordForm.medications[$index].medication" placeholder="e.g., Metformin" />
+              </template>
+            </el-table-column>
+            <el-table-column label="Status" width="120">
+              <template #default="{ $index }">
+                <el-select v-model="newRecordForm.medications[$index].status">
+                  <el-option label="Active" value="active" />
+                  <el-option label="Completed" value="completed" />
+                  <el-option label="Stopped" value="stopped" />
+                </el-select>
+              </template>
+            </el-table-column>
+            <el-table-column label="Prescribed Date" width="200">
+              <template #default="{ $index }">
+                <el-date-picker
+                  v-model="newRecordForm.medications[$index].authored_on"
+                  type="datetime"
+                  placeholder="Select date"
+                  format="YYYY-MM-DD HH:mm"
+                  value-format="YYYY-MM-DDTHH:mm:ss"
+                  style="width: 100%"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="Stop Date" width="200">
+              <template #default="{ $index }">
+                <el-date-picker
+                  v-model="newRecordForm.medications[$index].stop_date"
+                  type="datetime"
+                  placeholder="Stop date (optional)"
+                  format="YYYY-MM-DD HH:mm"
+                  value-format="YYYY-MM-DDTHH:mm:ss"
+                  style="width: 100%"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="Actions" width="80">
+              <template #default="{ $index }">
+                <el-button type="danger" size="small" @click="removeMedication($index)">Remove</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-button type="primary" size="small" @click="addMedication" class="mt-2">
+            + Add Medication
+          </el-button>
+        </div>
+
+        <!-- 手术 -->
+        <div class="form-section">
+          <h3 class="section-title">Procedures</h3>
+          <el-table :data="newRecordForm.procedures" border style="width: 100%">
+            <el-table-column label="Procedure" min-width="300">
+              <template #default="{ $index }">
+                <el-input v-model="newRecordForm.procedures[$index].code" placeholder="e.g., Appendectomy" />
+              </template>
+            </el-table-column>
+            <el-table-column label="Status" width="120">
+              <template #default="{ $index }">
+                <el-select v-model="newRecordForm.procedures[$index].status">
+                  <el-option label="Completed" value="completed" />
+                  <el-option label="In Progress" value="in-progress" />
+                  <el-option label="Planned" value="planned" />
+                </el-select>
+              </template>
+            </el-table-column>
+            <el-table-column label="Date" width="200">
+              <template #default="{ $index }">
+                <el-date-picker
+                  v-model="newRecordForm.procedures[$index].performed_datetime"
+                  type="datetime"
+                  placeholder="Select date"
+                  format="YYYY-MM-DD HH:mm"
+                  value-format="YYYY-MM-DDTHH:mm:ss"
+                  style="width: 100%"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="Actions" width="80">
+              <template #default="{ $index }">
+                <el-button type="danger" size="small" @click="removeProcedure($index)">Remove</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-button type="primary" size="small" @click="addProcedure" class="mt-2">
+            + Add Procedure
+          </el-button>
+        </div>
+      </div>
+
       <template #footer>
         <el-button @click="editDialogVisible = false">Cancel</el-button>
-        <el-button type="primary" :loading="savingRecord" @click="saveRecordEdit">
-          Save Overwrite
+        <el-button type="primary" :loading="savingRecord" @click="saveNewRecord">
+          Save New Record
         </el-button>
       </template>
     </el-dialog>
@@ -728,6 +1178,7 @@ onMounted(() => {
 .mb-2 { margin-bottom: 8px; }
 .mb-4 { margin-bottom: 16px; }
 .mb-6 { margin-bottom: 24px; }
+.mt-2 { margin-top: 8px; }
 .font-bold { font-weight: bold; }
 .text-muted { color: #909399; }
 
@@ -764,8 +1215,26 @@ onMounted(() => {
   font-size: 13px;
 }
 
-.record-json-editor {
-  font-family: Consolas, Monaco, monospace;
+.form-section {
+  margin-bottom: 24px;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  padding: 16px;
+  background-color: #fafafa;
+}
+
+.global-department {
+  margin-bottom: 16px;
+}
+
+.section-title {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #172033;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #409eff;
+  display: inline-block;
 }
 
 .dashboard-alert-fade-leave-active {

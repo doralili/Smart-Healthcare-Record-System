@@ -35,6 +35,7 @@ interface DiagnosisRow {
   dateValue: number | null;
   dateKey: string;
   encounterId: string | null;
+  doctor_name?: string;
   raw: Record<string, unknown>[];
 }
 
@@ -145,6 +146,7 @@ const diagnosisRows = computed<DiagnosisRow[]>(() => {
       dateValue: toTime(rawDate),
       dateKey,
       encounterId,
+      doctor_name: condition.doctor_name,
       raw: [condition],
     });
   });
@@ -1217,7 +1219,7 @@ onUnmounted(() => {
                       {{ selectedDiagnosis.date }}
                     </el-descriptions-item>
                     <el-descriptions-item label="Doctor">
-                      Not recorded in current imported record
+                       {{ selectedDiagnosis.doctor_name || 'Not recorded in current imported record' }}
                     </el-descriptions-item>
                   </el-descriptions>
                 </section>
