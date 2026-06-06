@@ -28,6 +28,9 @@ export interface PatientProfile {
 }
 
 export interface PatientRecordDetail extends PatientRecordSummary {
+  record_count?: number;
+  latest_record_id?: number | null;
+  latest_record_created_at?: string | null;
   patient: PatientProfile;
   record: MedicalRecordPayload;
 }
@@ -46,6 +49,12 @@ export function listMyRecords(token: string) {
 
 export function getMyRecordDetail(token: string, recordId: number) {
   return api.get<PatientRecordDetail>(`/api/patient/me/records/${recordId}`, {
+    headers: authHeaders(token),
+  });
+}
+
+export function getMyCombinedRecord(token: string) {
+  return api.get<PatientRecordDetail>("/api/patient/me/records/combined", {
     headers: authHeaders(token),
   });
 }

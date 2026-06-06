@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -123,12 +124,15 @@ DEPARTMENT_KEYWORDS = {
         "well child",
     ],
     "Dentistry": [
+        "caries",
         "dental",
         "dentist",
+        "filling",
         "fractured dental",
         "gingival",
         "gingivitis",
         "oral",
+        "teeth",
         "tooth",
     ],
     "Mental Health": [
@@ -284,6 +288,11 @@ def parse_encounter(resource: dict[str, Any]) -> dict[str, Any]:
 
 def classify_department_for_text(*values: Any) -> str | None:
     text = " ".join(str(value) for value in values if value).lower()
+    text = re.sub(
+        r"\s*\((finding|disorder|procedure|observable entity|regime/therapy)\)\s*",
+        " ",
+        text,
+    )
     if not text:
         return "General Medicine"
 

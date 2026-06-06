@@ -11,6 +11,7 @@ from app.models.patient import Patient
 from app.models.consent import Consent
 from app.models.doctor import Doctor
 from app.models.user import User
+from app.services.clinical_records import filter_related_clinical_records, normalize_clinical_record_links
 from app.services.crypto_service import MedicalRecordCryptoError, decrypt_record_json
 from app.services.audit_service import request_audit_context, write_audit_log
 
@@ -91,6 +92,106 @@ def best_consents_by_doctor(consents: list[Consent]) -> dict[int, Consent]:
     return result
 
 
+def is_placeholder_doctor_name(value: str | None) -> bool:
+    normalized = str(value or "").strip().casefold().replace(" ", "")
+    return normalized in {"", "norecord", "notrecorded", "unknown", "none", "null"}
+
+
+def get_doctor_display_name_by_user_id(db: Session, user_id: int) -> str:
+    result = (
+        db.query(User, Doctor)
+        .outerjoin(Doctor, Doctor.user_id == User.id)
+        .filter(User.id == user_id)
+        .first()
+    )
+    if result is None:
+        return ""
+
+    user, doctor = result
+    if doctor is not None and doctor.name:
+        display_name = doctor.name
+    else:
+        display_name = user.username
+    return "" if is_placeholder_doctor_name(display_name) else display_name
+
+
+def normalize_department(value: str | None) -> str:
+    return str(value or "").strip().casefold()
+
+
+def get_doctor_display_name(user: User, doctor: Doctor | None) -> str:
+    if doctor is not None and doctor.name:
+        display_name = doctor.name
+    else:
+        display_name = user.username
+    return "" if is_placeholder_doctor_name(display_name) else display_name
+
+
+def get_department_doctor_map(db: Session) -> dict[str, str]:
+    rows = (
+        db.query(User, Doctor)
+        .join(Doctor, Doctor.user_id == User.id)
+        .filter(User.role == "DOCTOR")
+        .filter(User.status == "ACTIVE")
+        .filter(Doctor.verified.is_(True))
+        .order_by(Doctor.department.asc(), Doctor.name.asc())
+        .all()
+    )
+
+    result: dict[str, str] = {}
+    for user, doctor in rows:
+        department_key = normalize_department(doctor.department)
+        display_name = get_doctor_display_name(user, doctor)
+        if department_key and display_name and department_key not in result:
+            result[department_key] = display_name
+    return result
+
+
+def get_doctor_name_by_department(
+    department_doctor_map: dict[str, str],
+    department: str | None,
+) -> str:
+    departments = [
+        normalize_department(item)
+        for item in str(department or "").split(";")
+        if normalize_department(item)
+    ]
+
+    for department_key in departments:
+        doctor_name = department_doctor_map.get(department_key)
+        if doctor_name:
+            return doctor_name
+
+    if not departments:
+        return department_doctor_map.get(normalize_department("General Medicine"), "")
+
+    return ""
+
+
+def apply_doctor_name(
+    item: dict,
+    *,
+    record_doctor_name: str | None,
+    department_doctor_map: dict[str, str] | None = None,
+) -> dict:
+    item_copy = item.copy()
+    doctor_name = record_doctor_name
+    if is_placeholder_doctor_name(doctor_name) and department_doctor_map is not None:
+        doctor_name = get_doctor_name_by_department(
+            department_doctor_map,
+            str(item.get("department") or ""),
+        )
+
+    if doctor_name and not is_placeholder_doctor_name(doctor_name):
+        item_copy["doctor_name"] = doctor_name
+        item_copy["doctor"] = doctor_name
+    else:
+        item_copy.pop("doctor_name", None)
+        if is_placeholder_doctor_name(str(item_copy.get("doctor") or "")):
+            item_copy.pop("doctor", None)
+    return item_copy
+
+
 @router.get("/combined")
 def get_my_combined_records(
     request: Request,
@@ -98,8 +199,6 @@ def get_my_combined_records(
     db: Session = Depends(get_db),
 ):
     """获取患者所有病历的合并数据，包含医生信息"""
-    from app.models.user import User as UserModel
-    
     patient = db.query(Patient).filter(Patient.user_id == current_user.id).first()
     if not patient:
         raise HTTPException(status_code=404, detail="Patient profile not found")
@@ -117,53 +216,75 @@ def get_my_combined_records(
     
     # 医生信息缓存
     doctor_cache = {}
+    department_doctor_map = get_department_doctor_map(db)
     
     for record in medical_records:
         try:
-            clinical_data = decrypt_record_json(record.encrypted_data, record.nonce)
+            clinical_data = filter_related_clinical_records(
+                normalize_clinical_record_links(
+                    decrypt_record_json(record.encrypted_data, record.nonce)
+                )
+            )
             
             # 获取医生信息
             doctor_name = None
             if record.updated_by_doctor_id:
                 if record.updated_by_doctor_id not in doctor_cache:
-                    doctor = db.query(UserModel).filter(UserModel.id == record.updated_by_doctor_id).first()
-                    doctor_cache[record.updated_by_doctor_id] = doctor.username if doctor else "Unknown"
+                    doctor_cache[record.updated_by_doctor_id] = get_doctor_display_name_by_user_id(
+                        db,
+                        record.updated_by_doctor_id,
+                    )
                 doctor_name = doctor_cache[record.updated_by_doctor_id]
             
             # 处理诊断，添加医生信息
             for cond in clinical_data.get("conditions", []):
-                cond_copy = cond.copy()
-                if doctor_name:
-                    cond_copy["doctor_name"] = doctor_name
-                all_conditions.append(cond_copy)
+                all_conditions.append(
+                    apply_doctor_name(
+                        cond,
+                        record_doctor_name=doctor_name,
+                        department_doctor_map=department_doctor_map,
+                    )
+                )
             
             # 处理用药
             for med in clinical_data.get("medications", []):
-                med_copy = med.copy()
-                if doctor_name:
-                    med_copy["doctor_name"] = doctor_name
-                all_medications.append(med_copy)
+                all_medications.append(
+                    apply_doctor_name(
+                        med,
+                        record_doctor_name=doctor_name,
+                        department_doctor_map=department_doctor_map,
+                    )
+                )
             
             # 处理检查结果
             for obs in clinical_data.get("observations", []):
-                obs_copy = obs.copy()
-                if doctor_name:
-                    obs_copy["doctor_name"] = doctor_name
-                all_observations.append(obs_copy)
+                all_observations.append(
+                    apply_doctor_name(
+                        obs,
+                        record_doctor_name=doctor_name,
+                        department_doctor_map=department_doctor_map,
+                    )
+                )
             
             # 处理手术
             for proc in clinical_data.get("procedures", []):
-                proc_copy = proc.copy()
-                if doctor_name:
-                    proc_copy["doctor_name"] = doctor_name
-                all_procedures.append(proc_copy)
+                all_procedures.append(
+                    apply_doctor_name(
+                        proc,
+                        record_doctor_name=doctor_name,
+                        department_doctor_map=department_doctor_map,
+                    )
+                )
             
             # 处理就诊
             for enc in clinical_data.get("encounters", []):
-                enc_copy = enc.copy()
-                if doctor_name:
-                    enc_copy["doctor_name"] = doctor_name
-                all_encounters.append(enc_copy)
+                all_encounters.append(
+                    apply_doctor_name(
+                        enc,
+                        record_doctor_name=doctor_name,
+                        department_doctor_map=department_doctor_map,
+                    )
+                )
                 
         except Exception as e:
             print(f"Decryption failed for record {record.id}: {e}")
@@ -201,12 +322,17 @@ def get_my_combined_records(
     )
     db.commit()
     
+    latest_record = medical_records[0] if medical_records else None
+
     return {
-        "id": 1,
+        "id": latest_record.id if latest_record else None,
         "patient_id": patient.id,
         "source": "COMBINED",
         "record_type": "COMBINED",
-        "created_at": now_beijing(),
+        "created_at": latest_record.created_at if latest_record else now_beijing(),
+        "record_count": len(medical_records),
+        "latest_record_id": latest_record.id if latest_record else None,
+        "latest_record_created_at": latest_record.created_at if latest_record else None,
         "patient": {
             "id": patient.id,
             "synthea_patient_id": patient.synthea_patient_id,
@@ -401,10 +527,9 @@ def get_pending_consents(
     
     result = []
     for c in pending:
-        doctor = db.query(User).filter(User.id == c.doctor_id).first()
         result.append({
             "consent_id": c.id,
-            "doctor_name": doctor.username if doctor else "Unknown",
+            "doctor_name": get_doctor_display_name_by_user_id(db, c.doctor_id),
             "record_scope": c.record_scope,
             "request_reason": c.request_reason,
             "created_at": c.created_at
@@ -438,10 +563,9 @@ def get_my_doctors(
     
     result = []
     for c in best_consents_by_doctor.values():
-        doctor = db.query(User).filter(User.id == c.doctor_id).first()
         result.append({
             "consent_id": c.id,
-            "doctor_name": doctor.username if doctor else "Unknown",
+            "doctor_name": get_doctor_display_name_by_user_id(db, c.doctor_id),
             "record_scope": c.record_scope,
             "granted_at": c.approved_at or c.created_at
         })
@@ -647,12 +771,35 @@ def get_my_record_detail(
     record, patient = result
 
     try:
-        decrypted_record = decrypt_record_json(record.encrypted_data, record.nonce)
+        decrypted_record = filter_related_clinical_records(
+            normalize_clinical_record_links(
+                decrypt_record_json(record.encrypted_data, record.nonce)
+            )
+        )
     except MedicalRecordCryptoError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to decrypt medical record",
         ) from exc
+
+    record_doctor_name = None
+    if record.updated_by_doctor_id:
+        record_doctor_name = get_doctor_display_name_by_user_id(
+            db,
+            record.updated_by_doctor_id,
+        )
+
+    department_doctor_map = get_department_doctor_map(db)
+    for key in ["conditions", "medications", "observations", "procedures", "encounters"]:
+        decrypted_record[key] = [
+            apply_doctor_name(
+                item,
+                record_doctor_name=record_doctor_name,
+                department_doctor_map=department_doctor_map,
+            )
+            for item in decrypted_record.get(key, [])
+            if isinstance(item, dict)
+        ]
 
     write_audit_log(
         db,

@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import DashboardLayout from "../layouts/DashboardLayout.vue"
-import { getMyPatients, getDoctorProfile, submitAccessRequest, getPatientRecord, updatePatientRecord, addPatientRecord } from '../api/doctor'
+import { getMyPatients, getDoctorProfile, submitAccessRequest, getPatientRecord, addPatientRecord } from '../api/doctor'
 import { ElMessage } from '../utils/message'
 
 const activeTab = ref('patients')
 const searchKeyword = ref('')
 const searchResults = ref<any[]>([])
 const patients = ref<any[]>([])
+const VISIT_TYPE_FALLBACK = 'General Clinical Visit'
+const VISIT_CLASS_FALLBACK = 'GENERAL'
 const showSignInAlert = ref(true)
 const doctorProfile = ref<any>(null)
 const dashboardTitle = computed(() =>
@@ -29,11 +31,17 @@ const applyForm = ref({
 })
 
 // 诊断详情弹窗
-const diagnosisDetailVisible = ref(false)
-const selectedDiagnosis = ref<any>(null)
+const visitDetailVisible = ref(false)
+const selectedVisit = ref<any>(null)
 
 // 新增病历表单
-const newRecordForm = ref({
+const newRecordForm = ref<{
+  encounters: any[]
+  conditions: any[]
+  observations: any[]
+  medications: any[]
+  procedures: any[]
+}>({
   encounters: [],
   conditions: [],
   observations: [],
@@ -44,10 +52,28 @@ const newRecordForm = ref({
 // 全局科室
 const globalDepartment = ref('')
 
+const getBeijingDateTimeValue = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(date)
+
+  const valueByType = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  return `${valueByType.year}-${valueByType.month}-${valueByType.day}T${valueByType.hour}:${valueByType.minute}:${valueByType.second}`
+}
+
+const getBeijingDateValue = () => getBeijingDateTimeValue().slice(0, 10)
+
 // 日期格式化函数
 const formatDate = (dateStr: string) => {
   if (!dateStr) return ''
-  return dateStr.split('T')[0]
+  return String(dateStr).split(/[T ]/)[0]
 }
 
 // 格式化日期时间（用于详情弹窗）
@@ -65,48 +91,259 @@ const formatDateTime = (dateStr: string) => {
 }
 
 // 获取诊断相关的就诊记录（按日期匹配）
-const getRelatedEncounters = (diagnosis: any) => {
-  if (!currentRecord.value?.raw_record?.encounters) return []
-  const diagnosisDate = diagnosis.date
-  if (!diagnosisDate) return []
-  return currentRecord.value.raw_record.encounters.filter((enc: any) => {
-    const encDate = enc.start?.split('T')[0]
-    return encDate === diagnosisDate
-  })
+const getDateKey = (value: any) => {
+  if (!value) return ''
+  return String(value).slice(0, 10)
 }
+
+const getEncounterId = (record: any) => {
+  if (!record) return ''
+  if (record.encounter_id) return String(record.encounter_id)
+  if (record.id) return String(record.id)
+  const reference = record.encounter?.reference
+  return reference ? String(reference).split('/').pop() || '' : ''
+}
+
+const getClinicalDateKey = (record: any) =>
+  getDateKey(
+    record?.recorded_date ||
+    record?.effective_datetime ||
+    record?.authored_on ||
+    record?.performed_datetime ||
+    record?.start ||
+    record?.date
+  )
+
+const isRelatedToDiagnosis = (record: any, diagnosis: any) => {
+  const recordEncounterId = getEncounterId(record)
+  const diagnosisEncounterId = getEncounterId(diagnosis)
+
+  if (recordEncounterId && diagnosisEncounterId && recordEncounterId === diagnosisEncounterId) {
+    return true
+  }
+
+  const recordDate = getClinicalDateKey(record)
+  const diagnosisDate = getClinicalDateKey(diagnosis)
+  return Boolean(recordDate && diagnosisDate && recordDate === diagnosisDate)
+}
+
+const getRelatedRecords = (
+  category: 'encounters' | 'medications' | 'observations' | 'procedures',
+  diagnosis: any
+) => {
+  const rows = currentRecord.value?.raw_record?.[category]
+  if (!Array.isArray(rows)) return []
+  return rows.filter((row: any) => isRelatedToDiagnosis(row, diagnosis))
+}
+
+const getRelatedEncounters = (diagnosis: any) => getRelatedRecords('encounters', diagnosis)
 
 // 获取诊断相关的用药记录（按日期匹配）
-const getRelatedMedications = (diagnosis: any) => {
-  if (!currentRecord.value?.raw_record?.medications) return []
-  const diagnosisDate = diagnosis.date
-  if (!diagnosisDate) return []
-  return currentRecord.value.raw_record.medications.filter((med: any) => {
-    const medDate = med.authored_on?.split('T')[0]
-    return medDate === diagnosisDate
-  })
-}
+const getRelatedMedications = (diagnosis: any) => getRelatedRecords('medications', diagnosis)
 
 // 获取诊断相关的检查结果（按日期匹配）
-const getRelatedObservations = (diagnosis: any) => {
-  if (!currentRecord.value?.raw_record?.observations) return []
-  const diagnosisDate = diagnosis.date
-  if (!diagnosisDate) return []
-  return currentRecord.value.raw_record.observations.filter((obs: any) => {
-    const obsDate = obs.effective_datetime?.split('T')[0]
-    return obsDate === diagnosisDate
+const getRelatedObservations = (diagnosis: any) => getRelatedRecords('observations', diagnosis)
+
+// 获取诊断相关的手术记录（按日期匹配）
+const getRelatedProcedures = (diagnosis: any) => getRelatedRecords('procedures', diagnosis)
+
+const joinUnique = (values: any[], fallback = 'Not recorded') => {
+  const unique = values
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .filter((value, index, array) => array.indexOf(value) === index)
+  return unique.length ? unique.join('; ') : fallback
+}
+
+const collectVisitDepartments = (visit: any) => {
+  const values = [
+    ...visit.diagnoses.map((item: any) => item.department),
+    ...visit.medications.map((item: any) => item.department),
+    ...visit.observations.map((item: any) => item.department),
+    ...visit.procedures.map((item: any) => item.department),
+    ...visit.encounters.map((item: any) => item.department),
+  ]
+
+  return joinUnique(values, '')
+}
+
+const resolveVisitGroupKey = (
+  grouped: Map<string, any>,
+  encounterId: string,
+  dateKey: string,
+  fallback: string,
+) => {
+  if (encounterId) {
+    return `encounter:${encounterId}`
+  }
+
+  if (dateKey) {
+    const sameDayVisit = Array.from(grouped.values()).find((visit) => visit.dateKey === dateKey)
+    if (sameDayVisit) {
+      return sameDayVisit.key
+    }
+    return `date:${dateKey}`
+  }
+
+  return fallback
+}
+
+const dedupeRecords = (rows: any[]) => {
+  const seen = new Set<string>()
+  return rows.filter((row) => {
+    const key = String(row?.id || [
+      row?.code,
+      row?.medication,
+      row?.value,
+      row?.authored_on,
+      row?.effective_datetime,
+      row?.performed_datetime,
+      row?.start,
+    ].join('|'))
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
   })
 }
 
-// 获取诊断相关的手术记录（按日期匹配）
-const getRelatedProcedures = (diagnosis: any) => {
-  if (!currentRecord.value?.raw_record?.procedures) return []
-  const diagnosisDate = diagnosis.date
-  if (!diagnosisDate) return []
-  return currentRecord.value.raw_record.procedures.filter((proc: any) => {
-    const procDate = proc.performed_datetime?.split('T')[0]
-    return procDate === diagnosisDate
+const visitRows = computed(() => {
+  const diagnoses = currentRecord.value?.diagnosis_list || []
+  const grouped = new Map<string, any>()
+
+  for (const diagnosis of diagnoses) {
+    const encounters = getRelatedEncounters(diagnosis)
+    const medications = getRelatedMedications(diagnosis)
+    const observations = getRelatedObservations(diagnosis)
+    const procedures = getRelatedProcedures(diagnosis)
+    const firstEncounter = encounters[0]
+    const diagnosisEncounterId = getEncounterId(diagnosis)
+    const diagnosisDateKey = getClinicalDateKey(diagnosis)
+    const key = resolveVisitGroupKey(grouped, diagnosisEncounterId, diagnosisDateKey, `diagnosis:${diagnosis.name || ''}`)
+    const date = firstEncounter?.start || diagnosis.date
+    const existing = grouped.get(key)
+
+    if (existing) {
+      existing.diagnoses.push(diagnosis)
+      existing.encounters = dedupeRecords([...existing.encounters, ...encounters])
+      existing.medications = dedupeRecords([...existing.medications, ...medications])
+      existing.observations = dedupeRecords([...existing.observations, ...observations])
+      existing.procedures = dedupeRecords([...existing.procedures, ...procedures])
+      existing.department = collectVisitDepartments(existing)
+      existing.visitType = joinUnique(existing.encounters.map((item: any) => item.type), VISIT_TYPE_FALLBACK)
+      existing.class = joinUnique(existing.encounters.map((item: any) => item.class), VISIT_CLASS_FALLBACK)
+      existing.status = joinUnique(existing.encounters.map((item: any) => item.status))
+      continue
+    }
+
+    grouped.set(key, {
+      key,
+      dateKey: diagnosisDateKey,
+      date,
+      department: diagnosis.department || '',
+      visitType: joinUnique(encounters.map((item: any) => item.type), VISIT_TYPE_FALLBACK),
+      class: joinUnique(encounters.map((item: any) => item.class), VISIT_CLASS_FALLBACK),
+      status: joinUnique(encounters.map((item: any) => item.status)),
+      diagnoses: [diagnosis],
+      encounters,
+      medications,
+      observations,
+      procedures,
+    })
+
+    const createdVisit = grouped.get(key)
+    if (createdVisit) {
+      createdVisit.department = collectVisitDepartments(createdVisit)
+    }
+  }
+
+  const encounters = currentRecord.value?.raw_record?.encounters || []
+  encounters.forEach((encounter: any, index: number) => {
+    const encounterId = getEncounterId(encounter)
+    const encounterDateKey = getClinicalDateKey(encounter)
+    const key = resolveVisitGroupKey(grouped, encounterId, encounterDateKey, `encounter:${index}`)
+
+    if (grouped.has(key)) {
+      return
+    }
+
+    grouped.set(key, {
+      key,
+      dateKey: encounterDateKey,
+      date: encounter.start,
+      department: encounter.department || '',
+      visitType: encounter.type || VISIT_TYPE_FALLBACK,
+      class: encounter.class || VISIT_CLASS_FALLBACK,
+      status: encounter.status || 'Not recorded',
+      diagnoses: [],
+      encounters: [encounter],
+      medications: [],
+      observations: [],
+      procedures: [],
+    })
+
+    const createdVisit = grouped.get(key)
+    if (createdVisit) {
+      createdVisit.department = collectVisitDepartments(createdVisit)
+    }
   })
-}
+
+  const attachClinicalRows = (
+    category: 'medications' | 'observations' | 'procedures',
+    fallbackPrefix: string,
+  ) => {
+    const rows = currentRecord.value?.raw_record?.[category] || []
+    rows.forEach((row: any, index: number) => {
+      const rowEncounterId = getEncounterId(row)
+      const rowDateKey = getClinicalDateKey(row)
+      const key = resolveVisitGroupKey(grouped, rowEncounterId, rowDateKey, `${fallbackPrefix}:${index}`)
+      const existing = grouped.get(key)
+
+      if (existing) {
+        existing[category] = dedupeRecords([...existing[category], row])
+        existing.department = collectVisitDepartments(existing)
+        return
+      }
+
+      grouped.set(key, {
+        key,
+        dateKey: rowDateKey,
+        date: row.authored_on || row.effective_datetime || row.performed_datetime || rowDateKey,
+        department: row.department || '',
+        visitType: VISIT_TYPE_FALLBACK,
+        class: VISIT_CLASS_FALLBACK,
+        status: row.status || 'Not recorded',
+        diagnoses: [],
+        encounters: [],
+        medications: category === 'medications' ? [row] : [],
+        observations: category === 'observations' ? [row] : [],
+        procedures: category === 'procedures' ? [row] : [],
+      })
+
+      const createdVisit = grouped.get(key)
+      if (createdVisit) {
+        createdVisit.department = collectVisitDepartments(createdVisit)
+      }
+    })
+  }
+
+  attachClinicalRows('medications', 'medication')
+  attachClinicalRows('observations', 'observation')
+  attachClinicalRows('procedures', 'procedure')
+
+  return Array.from(grouped.values()).filter((visit) =>
+    visit.diagnoses.length > 0 ||
+    visit.medications.length > 0 ||
+    visit.observations.length > 0 ||
+    visit.procedures.length > 0
+  ).sort((first, second) => {
+    const firstTime = new Date(first.date || '').getTime()
+    const secondTime = new Date(second.date || '').getTime()
+    if (Number.isNaN(firstTime) && Number.isNaN(secondTime)) return 0
+    if (Number.isNaN(firstTime)) return 1
+    if (Number.isNaN(secondTime)) return -1
+    return secondTime - firstTime
+  })
+})
 
 // 按状态和范围分组
 const fullAccessPatients = computed(() => 
@@ -136,7 +373,7 @@ const expiredPatients = computed(() =>
 // 获取患者列表
 const loadPatients = async () => {
   try {
-    const res = await getMyPatients()
+    const res: any = await getMyPatients()
     if (res && res.patient_list) {
       patients.value = res.patient_list
     }
@@ -170,7 +407,7 @@ const searchPatients = async () => {
 // 查看病历
 const openRecord = async (patient: any) => {
   try {
-    const res = await getPatientRecord(patient.id)
+    const res: any = await getPatientRecord(patient.id)
     currentPatient.value = patient
     currentRecord.value = res.medical_record
     recordDialogVisible.value = true
@@ -179,9 +416,9 @@ const openRecord = async (patient: any) => {
   }
 }
 
-const viewDiagnosisDetail = (diagnosis: any) => {
-  selectedDiagnosis.value = diagnosis
-  diagnosisDetailVisible.value = true
+const viewVisitDetail = (visit: any) => {
+  selectedVisit.value = visit
+  visitDetailVisible.value = true
 }
 
 const loadDoctorProfile = async () => {
@@ -198,7 +435,7 @@ const addEncounter = () => {
     type: '',
     class: '',
     status: 'finished',
-    start: new Date().toISOString().slice(0, 19)
+    start: getBeijingDateTimeValue()
   })
 }
 
@@ -210,7 +447,7 @@ const addCondition = () => {
   newRecordForm.value.conditions.push({
     code: '',
     clinical_status: 'active',
-    recorded_date: new Date().toISOString().slice(0, 10)
+    recorded_date: getBeijingDateValue()
   })
 }
 
@@ -223,7 +460,7 @@ const addObservation = () => {
     code: '',
     value: '',
     status: 'final',
-    effective_datetime: new Date().toISOString().slice(0, 19)
+    effective_datetime: getBeijingDateTimeValue()
   })
 }
 
@@ -235,7 +472,7 @@ const addMedication = () => {
   newRecordForm.value.medications.push({
     medication: '',
     status: 'active',
-    authored_on: new Date().toISOString().slice(0, 19),
+    authored_on: getBeijingDateTimeValue(),
     stop_date: ''
   })
 }
@@ -248,7 +485,7 @@ const addProcedure = () => {
   newRecordForm.value.procedures.push({
     code: '',
     status: 'completed',
-    performed_datetime: new Date().toISOString().slice(0, 19)
+    performed_datetime: getBeijingDateTimeValue()
   })
 }
 
@@ -287,21 +524,26 @@ const saveNewRecord = async () => {
   }
 
   // 为所有记录设置 department
-  for (const encounter of newRecordForm.value.encounters) {
+  const recordTime = Date.now()
+  for (const [index, encounter] of newRecordForm.value.encounters.entries()) {
+    encounter.id = encounter.id || `doctor-encounter-${recordTime}-${index + 1}`
     encounter.department = globalDepartment.value
   }
-  for (const condition of newRecordForm.value.conditions) {
-    condition.department = globalDepartment.value
+
+  const primaryEncounterId = newRecordForm.value.encounters[0]?.id || ''
+  const applyRecordMetadata = (items: any[]) => {
+    for (const item of items) {
+      item.department = globalDepartment.value
+      if (primaryEncounterId && !item.encounter_id) {
+        item.encounter_id = primaryEncounterId
+      }
+    }
   }
-  for (const observation of newRecordForm.value.observations) {
-    observation.department = globalDepartment.value
-  }
-  for (const medication of newRecordForm.value.medications) {
-    medication.department = globalDepartment.value
-  }
-  for (const procedure of newRecordForm.value.procedures) {
-    procedure.department = globalDepartment.value
-  }
+
+  applyRecordMetadata(newRecordForm.value.conditions)
+  applyRecordMetadata(newRecordForm.value.observations)
+  applyRecordMetadata(newRecordForm.value.medications)
+  applyRecordMetadata(newRecordForm.value.procedures)
 
   const hasData = 
     newRecordForm.value.encounters.length > 0 ||
@@ -773,76 +1015,80 @@ onMounted(() => {
         </el-descriptions>
 
         <el-descriptions title="Summary" border :column="2" class="mb-4">
-          <el-descriptions-item label="Visits">{{ currentRecord.visits }}</el-descriptions-item>
+          <el-descriptions-item label="Visits">{{ visitRows.length }}</el-descriptions-item>
           <el-descriptions-item label="Diagnoses">{{ currentRecord.diagnoses }}</el-descriptions-item>
+          <el-descriptions-item v-if="currentPatient?.scope === 'EXTRA'" label="Lab / Vital Count">{{ currentRecord.lab_results?.length || 0 }}</el-descriptions-item>
           <el-descriptions-item v-if="currentPatient?.scope === 'EXTRA'" label="Medications Count">{{ currentRecord.medications?.length || 0 }}</el-descriptions-item>
           <el-descriptions-item v-if="currentPatient?.scope === 'EXTRA'" label="Procedures Count">{{ currentRecord.procedures?.length || 0 }}</el-descriptions-item>
         </el-descriptions>
 
-        <h3 class="font-bold mb-2">Diagnosis List</h3>
-        <el-table :data="currentRecord.diagnosis_list || []" border>
+        <h3 class="font-bold mb-2">Visits</h3>
+        <el-table :data="visitRows" border>
           <el-table-column prop="department" label="Department" width="150" />
-          <el-table-column prop="name" label="Diagnosis" min-width="260" />
-          <el-table-column prop="status" label="Status" width="100" />
-          <el-table-column prop="date" label="Date" width="120" />
-          <el-table-column v-if="currentPatient?.scope === 'EXTRA'" label="Detail" width="80">
+          <el-table-column prop="visitType" label="Visit Type" min-width="220" />
+          <el-table-column prop="class" label="Class" width="120" />
+          <el-table-column label="Date" width="160">
             <template #default="{ row }">
-              <el-button type="primary" link size="small" @click="viewDiagnosisDetail(row)">
+              {{ formatDate(row.date) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="Diagnoses" width="100">
+            <template #default="{ row }">
+              {{ row.diagnoses.length }}
+            </template>
+          </el-table-column>
+          <el-table-column v-if="currentPatient?.scope === 'EXTRA'" label="Lab / Vital" width="100">
+            <template #default="{ row }">
+              {{ row.observations.length }}
+            </template>
+          </el-table-column>
+          <el-table-column v-if="currentPatient?.scope === 'EXTRA'" label="Medications" width="110">
+            <template #default="{ row }">
+              {{ row.medications.length }}
+            </template>
+          </el-table-column>
+          <el-table-column v-if="currentPatient?.scope === 'EXTRA'" label="Procedures" width="100">
+            <template #default="{ row }">
+              {{ row.procedures.length }}
+            </template>
+          </el-table-column>
+          <el-table-column label="Detail" width="80">
+            <template #default="{ row }">
+              <el-button type="primary" link size="small" @click="viewVisitDetail(row)">
                 View
               </el-button>
             </template>
           </el-table-column>
         </el-table>
 
-        <template v-if="currentPatient?.scope === 'EXTRA'">
-          <h3 class="font-bold mb-2">Medications</h3>
-          <el-table :data="currentRecord.medications || []" border class="mb-4">
-            <el-table-column prop="name" label="Medication" min-width="280" />
-            <el-table-column prop="status" label="Status" width="140" />
-            <el-table-column label="Prescribed At" width="190">
-              <template #default="{ row }">
-                {{ formatDate(row.start_date) }}
-              </template>
-            </el-table-column>
-          </el-table>
-
-          <h3 class="font-bold mb-2">Procedures</h3>
-          <el-table :data="currentRecord.procedures || []" border class="mb-4">
-            <el-table-column prop="name" label="Procedure" min-width="280" />
-            <el-table-column prop="status" label="Status" width="140" />
-            <el-table-column label="Date" width="190">
-              <template #default="{ row }">
-                {{ formatDate(row.date) }}
-              </template>
-            </el-table-column>
-          </el-table>
-        </template>
       </div>
     </el-dialog>
 
     <!-- 诊断详情弹窗 -->
-    <el-dialog v-model="diagnosisDetailVisible" :title="selectedDiagnosis?.name || 'Diagnosis Detail'" width="70%">
-      <div v-if="selectedDiagnosis && currentRecord?.raw_record">
-        <el-descriptions title="Diagnosis Information" border :column="2" class="mb-4">
-          <el-descriptions-item label="Diagnosis">{{ selectedDiagnosis.name }}</el-descriptions-item>
-          <el-descriptions-item label="Status">{{ selectedDiagnosis.status }}</el-descriptions-item>
-          <el-descriptions-item label="Recorded At">{{ formatDateTime(selectedDiagnosis.date) }}</el-descriptions-item>
+    <el-dialog v-model="visitDetailVisible" :title="selectedVisit?.visitType || 'Visit Detail'" width="70%">
+      <div v-if="selectedVisit">
+        <el-descriptions title="Visit Information" border :column="2" class="mb-4">
+          <el-descriptions-item label="Visit Type">{{ selectedVisit.visitType }}</el-descriptions-item>
+          <el-descriptions-item label="Department">{{ selectedVisit.department }}</el-descriptions-item>
+          <el-descriptions-item label="Class">{{ selectedVisit.class }}</el-descriptions-item>
+          <el-descriptions-item label="Status">{{ selectedVisit.status }}</el-descriptions-item>
+          <el-descriptions-item label="Date">{{ formatDateTime(selectedVisit.date) }}</el-descriptions-item>
         </el-descriptions>
 
-        <h3 class="font-bold mb-2">Related Visits</h3>
-        <el-table :data="getRelatedEncounters(selectedDiagnosis)" border class="mb-4">
-          <el-table-column prop="type" label="Visit Type" min-width="220" />
-          <el-table-column prop="class" label="Class" width="130" />
+        <h3 class="font-bold mb-2">Diagnoses</h3>
+        <el-table :data="selectedVisit.diagnoses" border class="mb-4">
+          <el-table-column prop="department" label="Department" width="150" />
+          <el-table-column prop="name" label="Diagnosis" min-width="260" />
           <el-table-column prop="status" label="Status" width="140" />
           <el-table-column label="Date" width="190">
             <template #default="{ row }">
-              {{ formatDateTime(row.start) }}
+              {{ formatDateTime(row.date) }}
             </template>
           </el-table-column>
         </el-table>
 
-        <h3 class="font-bold mb-2">Related Medications</h3>
-        <el-table :data="getRelatedMedications(selectedDiagnosis)" border class="mb-4">
+        <h3 class="font-bold mb-2">Medications</h3>
+        <el-table :data="selectedVisit.medications" border class="mb-4">
           <el-table-column prop="medication" label="Medication" min-width="280" />
           <el-table-column prop="status" label="Status" width="140" />
           <el-table-column label="Prescribed At" width="190">
@@ -852,8 +1098,8 @@ onMounted(() => {
           </el-table-column>
         </el-table>
 
-        <h3 class="font-bold mb-2">Related Lab / Vital Results</h3>
-        <el-table :data="getRelatedObservations(selectedDiagnosis)" border class="mb-4">
+        <h3 class="font-bold mb-2">Lab / Vital Results</h3>
+        <el-table :data="selectedVisit.observations" border class="mb-4">
           <el-table-column prop="code" label="Item" min-width="260" />
           <el-table-column prop="value" label="Result" min-width="180" />
           <el-table-column prop="status" label="Status" width="140" />
@@ -864,8 +1110,8 @@ onMounted(() => {
           </el-table-column>
         </el-table>
 
-        <h3 class="font-bold mb-2">Related Procedures</h3>
-        <el-table :data="getRelatedProcedures(selectedDiagnosis)" border class="mb-4">
+        <h3 class="font-bold mb-2">Procedures</h3>
+        <el-table :data="selectedVisit.procedures" border class="mb-4">
           <el-table-column prop="code" label="Procedure" min-width="280" />
           <el-table-column prop="status" label="Status" width="140" />
           <el-table-column label="Date" width="190">
@@ -875,16 +1121,6 @@ onMounted(() => {
           </el-table-column>
         </el-table>
 
-        <el-alert
-          v-if="getRelatedEncounters(selectedDiagnosis).length === 0 && 
-                 getRelatedMedications(selectedDiagnosis).length === 0 && 
-                 getRelatedObservations(selectedDiagnosis).length === 0 && 
-                 getRelatedProcedures(selectedDiagnosis).length === 0"
-          title="No related medical records found for this diagnosis"
-          type="info"
-          show-icon
-          :closable="false"
-        />
       </div>
     </el-dialog>
 

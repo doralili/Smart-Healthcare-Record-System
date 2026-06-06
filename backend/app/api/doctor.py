@@ -12,6 +12,7 @@ from app.models.medical_record import MedicalRecord
 from app.models.patient import Patient
 from app.schemas.doctor import AccessRequestCreate
 from app.services.masking import mask_record_by_scope
+from app.services.clinical_records import filter_related_clinical_records, normalize_clinical_record_links
 from app.services.audit_service import request_audit_context, write_audit_log
 from app.services.crypto_service import MedicalRecordCryptoError, encrypt_record_json
 
@@ -305,7 +306,11 @@ def get_patient_mask_record(
     
     for record in medical_records:
         try:
-            clinical_data = decrypt_record_json(record.encrypted_data, record.nonce)
+            clinical_data = filter_related_clinical_records(
+                normalize_clinical_record_links(
+                    decrypt_record_json(record.encrypted_data, record.nonce)
+                )
+            )
             all_conditions.extend(clinical_data.get("conditions", []))
             all_medications.extend(clinical_data.get("medications", []))
             all_observations.extend(clinical_data.get("observations", []))
@@ -527,7 +532,7 @@ def update_patient_record(
     )
 
     try:
-        encrypted_data, nonce = encrypt_record_json(payload.record)
+        encrypted_data, nonce = encrypt_record_json(normalize_clinical_record_links(payload.record))
     except MedicalRecordCryptoError as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to encrypt medical record") from exc
@@ -632,7 +637,7 @@ def add_patient_record(
         raise HTTPException(status_code=404, detail="Patient not found")
     
     try:
-        encrypted_data, nonce = encrypt_record_json(payload.record)
+        encrypted_data, nonce = encrypt_record_json(normalize_clinical_record_links(payload.record))
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Failed to encrypt medical record") from exc
     
