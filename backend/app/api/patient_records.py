@@ -91,6 +91,142 @@ def best_consents_by_doctor(consents: list[Consent]) -> dict[int, Consent]:
     return result
 
 
+@router.get("/combined")
+def get_my_combined_records(
+    request: Request,
+    current_user: User = Depends(require_roles("PATIENT")),
+    db: Session = Depends(get_db),
+):
+    """获取患者所有病历的合并数据，包含医生信息"""
+    from app.models.user import User as UserModel
+    
+    patient = db.query(Patient).filter(Patient.user_id == current_user.id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient profile not found")
+    
+    medical_records = db.query(MedicalRecord).filter(
+        MedicalRecord.patient_id == patient.id
+    ).order_by(MedicalRecord.created_at.desc()).all()
+    
+    # 合并所有病历数据
+    all_conditions = []
+    all_medications = []
+    all_observations = []
+    all_procedures = []
+    all_encounters = []
+    
+    # 医生信息缓存
+    doctor_cache = {}
+    
+    for record in medical_records:
+        try:
+            clinical_data = decrypt_record_json(record.encrypted_data, record.nonce)
+            
+            # 获取医生信息
+            doctor_name = None
+            if record.updated_by_doctor_id:
+                if record.updated_by_doctor_id not in doctor_cache:
+                    doctor = db.query(UserModel).filter(UserModel.id == record.updated_by_doctor_id).first()
+                    doctor_cache[record.updated_by_doctor_id] = doctor.username if doctor else "Unknown"
+                doctor_name = doctor_cache[record.updated_by_doctor_id]
+            
+            # 处理诊断，添加医生信息
+            for cond in clinical_data.get("conditions", []):
+                cond_copy = cond.copy()
+                if doctor_name:
+                    cond_copy["doctor_name"] = doctor_name
+                all_conditions.append(cond_copy)
+            
+            # 处理用药
+            for med in clinical_data.get("medications", []):
+                med_copy = med.copy()
+                if doctor_name:
+                    med_copy["doctor_name"] = doctor_name
+                all_medications.append(med_copy)
+            
+            # 处理检查结果
+            for obs in clinical_data.get("observations", []):
+                obs_copy = obs.copy()
+                if doctor_name:
+                    obs_copy["doctor_name"] = doctor_name
+                all_observations.append(obs_copy)
+            
+            # 处理手术
+            for proc in clinical_data.get("procedures", []):
+                proc_copy = proc.copy()
+                if doctor_name:
+                    proc_copy["doctor_name"] = doctor_name
+                all_procedures.append(proc_copy)
+            
+            # 处理就诊
+            for enc in clinical_data.get("encounters", []):
+                enc_copy = enc.copy()
+                if doctor_name:
+                    enc_copy["doctor_name"] = doctor_name
+                all_encounters.append(enc_copy)
+                
+        except Exception as e:
+            print(f"Decryption failed for record {record.id}: {e}")
+            continue
+    
+    # 去重函数（根据 id 字段）
+    def dedupe_by_id(items, key="id"):
+        seen = set()
+        unique = []
+        for item in items:
+            item_id = item.get(key)
+            if item_id and item_id not in seen:
+                seen.add(item_id)
+                unique.append(item)
+            elif not item_id:
+                unique.append(item)
+        return unique
+    
+    all_conditions = dedupe_by_id(all_conditions)
+    all_medications = dedupe_by_id(all_medications)
+    all_observations = dedupe_by_id(all_observations)
+    all_procedures = dedupe_by_id(all_procedures)
+    all_encounters = dedupe_by_id(all_encounters, key="id")
+    
+    write_audit_log(
+        db,
+        action="PATIENT_VIEW_OWN_RECORD",
+        actor=current_user,
+        target_type="patient",
+        target_id=patient.id,
+        patient_id=patient.id,
+        outcome="SUCCESS",
+        detail="Patient viewed combined medical records",
+        **request_audit_context(request),
+    )
+    db.commit()
+    
+    return {
+        "id": 1,
+        "patient_id": patient.id,
+        "source": "COMBINED",
+        "record_type": "COMBINED",
+        "created_at": now_beijing(),
+        "patient": {
+            "id": patient.id,
+            "synthea_patient_id": patient.synthea_patient_id,
+            "full_name": patient.full_name,
+            "gender": patient.gender,
+            "birth_date": patient.birth_date,
+            "phone": patient.phone,
+            "address": patient.address,
+            "created_at": patient.created_at,
+        },
+        "record": {
+            "conditions": all_conditions,
+            "medications": all_medications,
+            "observations": all_observations,
+            "procedures": all_procedures,
+            "encounters": all_encounters
+        }
+    }
+
+
 @router.get("/available-doctors")
 def get_available_doctors(
     department: str = "",

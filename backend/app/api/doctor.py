@@ -240,6 +240,7 @@ def get_patient_mask_record(
     current_user: User = Depends(get_current_user),
     _=Depends(require_roles("DOCTOR"))
 ):
+    from datetime import datetime, timedelta
     ensure_doctor_approved(db, current_user)
     from app.models.medical_record import MedicalRecord
     from app.services.crypto_service import decrypt_record_json
@@ -282,23 +283,63 @@ def get_patient_mask_record(
     if not valid_consent:
         raise HTTPException(status_code=403, detail="No access permission or authorization expired")
 
-    # 4. 获取患者基本信息（从 patients 表）
+    # 4. 获取患者基本信息
     patient = db.query(Patient).filter(Patient.id == patient_id).first()
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
 
-    # 5. 查询并解密病历
-    medical_record = db.query(MedicalRecord).filter(
+    # 5. 查询并解密所有病历（不只是最新的一条）
+    medical_records = db.query(MedicalRecord).filter(
         MedicalRecord.patient_id == patient_id
-    ).order_by(MedicalRecord.created_at.desc()).first()
+    ).order_by(MedicalRecord.created_at.desc()).all()
     
-    clinical_data = {}
-    if medical_record:
+    # 合并所有病历数据
+    all_conditions = []
+    all_medications = []
+    all_observations = []
+    all_procedures = []
+    all_encounters = []
+    latest_updated_at = None
+    latest_updated_by = None
+    latest_record_id = None
+    
+    for record in medical_records:
         try:
-            clinical_data = decrypt_record_json(medical_record.encrypted_data, medical_record.nonce)
+            clinical_data = decrypt_record_json(record.encrypted_data, record.nonce)
+            all_conditions.extend(clinical_data.get("conditions", []))
+            all_medications.extend(clinical_data.get("medications", []))
+            all_observations.extend(clinical_data.get("observations", []))
+            all_procedures.extend(clinical_data.get("procedures", []))
+            all_encounters.extend(clinical_data.get("encounters", []))
+            
+            # 记录最新更新的信息
+            if record.updated_at and (latest_updated_at is None or record.updated_at > latest_updated_at):
+                latest_updated_at = record.updated_at
+                latest_updated_by = record.updated_by_doctor_id
+                latest_record_id = record.id
         except Exception as e:
-            print(f"Decryption failed: {e}")
-            clinical_data = {}
+            print(f"Decryption failed for record {record.id}: {e}")
+            continue
+    
+    # 去重函数（根据 id 字段）
+    def dedupe_by_id(items, key="id"):
+        seen = set()
+        unique = []
+        for item in items:
+            item_id = item.get(key)
+            if item_id and item_id not in seen:
+                seen.add(item_id)
+                unique.append(item)
+            elif not item_id:
+                unique.append(item)
+        return unique
+    
+    # 去重
+    all_conditions = dedupe_by_id(all_conditions)
+    all_medications = dedupe_by_id(all_medications)
+    all_observations = dedupe_by_id(all_observations)
+    all_procedures = dedupe_by_id(all_procedures)
+    all_encounters = dedupe_by_id(all_encounters, key="id")
     
     # 6. 手机号脱敏函数
     def mask_phone(phone):
@@ -309,94 +350,118 @@ def get_patient_mask_record(
             return phone_str[:3] + "****" + phone_str[-4:]
         return phone_str
     
-    # 7. 提取诊断列表
-    conditions = clinical_data.get("conditions", [])
-    diagnoses_list = []
-    for cond in conditions:
-        diagnoses_list.append({
-            "name": cond.get("code", ""),
-            "department": cond.get("department", "General Medicine"),
-            "status": cond.get("clinical_status", "active"),
-            "date": cond.get("recorded_date", "")[:10] if cond.get("recorded_date") else ""
-        })
+    # 7. 日期过滤函数
+    def filter_records_by_date(records, days=365):
+        """过滤一年内的记录"""
+        if not records:
+            return []
+        one_year_ago = now_beijing() - timedelta(days=days)
+        filtered = []
+        for record in records:
+            date_str = record.get("recorded_date") or record.get("effective_datetime") or record.get("authored_on") or record.get("performed_datetime")
+            if date_str:
+                try:
+                    if isinstance(date_str, str):
+                        record_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                    else:
+                        record_date = date_str
+                    if record_date >= one_year_ago:
+                        filtered.append(record)
+                except:
+                    filtered.append(record)
+            else:
+                filtered.append(record)
+        return filtered
     
-    # 8. 提取用药列表
-    medications = clinical_data.get("medications", [])
-    medications_list = []
-    for med in medications:
-        medications_list.append({
+    # 8. 构建诊断列表
+    def build_diagnosis_list(conds):
+        return [{
+            "name": cond.get("code", ""),
+            "department": cond.get("department","Not Classified"),
+            "status": cond.get("clinical_status", "active"),
+            "date": cond.get("recorded_date", "")[:10] if cond.get("recorded_date") else "",
+            "encounter_id": cond.get("encounter_id")
+        } for cond in conds]
+    
+    # 9. 构建用药列表
+    def build_medications_list(meds):
+        return [{
             "name": med.get("medication", ""),
-            "department": med.get("department", "General Medicine"),
             "start_date": med.get("authored_on", "")[:10] if med.get("authored_on") else "",
             "stop_date": med.get("stop_date", "")[:10] if med.get("stop_date") else ""
-        })
+        } for med in meds if med.get("medication")]
     
-    # 9. 提取检查结果
-    observations = clinical_data.get("observations", [])
-    observations_list = []
-    for obs in observations:
-        observations_list.append({
+    # 10. 构建检查结果列表
+    def build_observations_list(obs):
+        return [{
             "test_name": obs.get("code", ""),
             "value": obs.get("value", ""),
-            "department": obs.get("department", "General Medicine"),
             "date": obs.get("effective_datetime", "")[:10] if obs.get("effective_datetime") else ""
-        })
+        } for obs in obs if obs.get("code")]
     
-    # 10. 提取手术/操作
-    procedures = clinical_data.get("procedures", [])
-    procedures_list = []
-    for proc in procedures:
-        procedures_list.append({
+    # 11. 构建手术列表
+    def build_procedures_list(procs):
+        return [{
             "name": proc.get("code", ""),
-            "department": proc.get("department", "General Medicine"),
             "date": proc.get("performed_datetime", "")[:10] if proc.get("performed_datetime") else ""
-        })
+        } for proc in procs if proc.get("code")]
     
-    # 11. 按授权范围脱敏
+    # 12. 按授权范围返回
     scope = valid_consent.record_scope
     
     if scope == "DEFAULT":
-        # 默认范围：基本信息 + 诊断列表
+        # 默认范围：只显示一年内的记录
+        filtered_conditions = filter_records_by_date(all_conditions, 365)
+        
         result = {
-            "record_id": medical_record.id if medical_record else None,
+            "record_id": latest_record_id,
             "name": patient.full_name,
             "gender": patient.gender,
             "phone": mask_phone(patient.phone),
             "address": mask_address(patient.address),
             "birth_date": str(patient.birth_date) if patient.birth_date else "",
-            "visits": len(clinical_data.get("encounters", [])),
-            "diagnoses": len(conditions),
+            "visits": len(all_encounters),
+            "diagnoses": len(filtered_conditions),
             "lab_results": "Limited - apply full access to view",
             "medications": "Limited - apply full access to view",
             "procedures": "Limited - apply full access to view",
-            "diagnosis_list": diagnoses_list,
-            "updated_at": medical_record.updated_at if medical_record else None,
-            "updated_by_doctor_id": medical_record.updated_by_doctor_id if medical_record else None,
-            "message": "Default scope - only basic info and diagnoses are shown"
+            "diagnosis_list": build_diagnosis_list(filtered_conditions),
+            "updated_at": latest_updated_at,
+            "updated_by_doctor_id": latest_updated_by,
+            "record_scope": scope,
+            "message": f"Default scope - only records from the last year ({len(filtered_conditions)} diagnoses found)"
         }
+        if len(filtered_conditions) == 0:
+            result["message"] = "Default scope - no medical records in the last year"
     else:
-        # 额外授权范围：完整信息
+        # 额外授权范围：完整信息（显示所有记录）
         result = {
-            "record_id": medical_record.id if medical_record else None,
+            "record_id": latest_record_id,
             "name": patient.full_name,
             "gender": patient.gender,
             "phone": patient.phone,
             "address": patient.address,
             "birth_date": str(patient.birth_date) if patient.birth_date else "",
-            "visits": len(clinical_data.get("encounters", [])),
-            "diagnoses": len(conditions),
-            "lab_results": observations_list,
-            "medications": medications_list,
-            "procedures": procedures_list,
-            "diagnosis_list": diagnoses_list,
-            "raw_record": clinical_data,
-            "updated_at": medical_record.updated_at if medical_record else None,
-            "updated_by_doctor_id": medical_record.updated_by_doctor_id if medical_record else None,
+            "visits": len(all_encounters),
+            "diagnoses": len(all_conditions),
+            "lab_results": build_observations_list(all_observations),
+            "medications": build_medications_list(all_medications),
+            "procedures": build_procedures_list(all_procedures),
+            "diagnosis_list": build_diagnosis_list(all_conditions),
+            "raw_record": {
+                "conditions": all_conditions,
+                "medications": all_medications,
+                "observations": all_observations,
+                "procedures": all_procedures,
+                "encounters": all_encounters
+            },
+            "updated_at": latest_updated_at,
+            "updated_by_doctor_id": latest_updated_by,
+            "record_scope": scope,
             "message": "Full access - all medical records are shown"
         }
     
     return {"medical_record": result}
-
 
 @router.put("/patients/{patient_id}/records/{record_id}")
 def update_patient_record(
@@ -523,3 +588,81 @@ def search_patients(
         })
     
     return {"patients": result}
+
+
+@router.post("/patients/{patient_id}/records")
+def add_patient_record(
+    patient_id: int,
+    payload: MedicalRecordUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _=Depends(require_roles("DOCTOR"))
+):
+    ensure_doctor_approved(db, current_user)
+    
+    # 检查是否有有效授权（DEFAULT 或 EXTRA 都可以）
+    valid_consent = get_valid_consent(
+        db,
+        patient_id=patient_id,
+        doctor_user_id=current_user.id,
+    )
+    if valid_consent is None:
+        write_audit_log(
+            db,
+            action="DOCTOR_ADD_RECORD_DENIED",
+            actor=current_user,
+            target_type="patient",
+            target_id=patient_id,
+            doctor_id=current_user.id,
+            patient_id=patient_id,
+            outcome="DENIED",
+            detail="Doctor add record denied: no active consent",
+            **request_audit_context(request),
+        )
+        db.commit()
+        raise HTTPException(status_code=403, detail="No access permission")
+    
+    from app.models.medical_record import MedicalRecord
+    from app.services.crypto_service import encrypt_record_json
+    
+    # 验证患者存在
+    patient = db.query(Patient).filter(Patient.id == patient_id).first()
+    if patient is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    
+    try:
+        encrypted_data, nonce = encrypt_record_json(payload.record)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Failed to encrypt medical record") from exc
+    
+    new_record = MedicalRecord(
+        patient_id=patient_id,
+        source="DOCTOR",
+        record_type="DOCTOR_ADDED",
+        encrypted_data=encrypted_data,
+        nonce=nonce,
+        updated_by_doctor_id=current_user.id,
+        created_at=now_beijing(),
+        updated_at=now_beijing()
+    )
+    db.add(new_record)
+    db.flush()
+    
+    write_audit_log(
+        db,
+        action="DOCTOR_ADD_RECORD",
+        actor=current_user,
+        target_type="medical_record",
+        target_id=new_record.id,
+        doctor_id=current_user.id,
+        patient_id=patient_id,
+        consent_id=valid_consent.id,
+        record_scope=valid_consent.record_scope,
+        outcome="SUCCESS",
+        detail="Doctor added new medical record",
+        **request_audit_context(request),
+    )
+    db.commit()
+    
+    return {"record_id": new_record.id, "patient_id": patient_id, "message": "Medical record added successfully"}
