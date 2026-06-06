@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: 'http://127.0.0.1:8000'
+  baseURL: 'http://localhost:8000'
 })
 
 // 请求拦截器（自动带 token）
@@ -22,32 +22,32 @@ api.interceptors.response.use(
   }
 )
 
+// 获取医生个人信息
+export function getDoctorProfile() {
+  return api.get('/api/doctor/me')
+}
+
 // 获取我的患者
 export function getMyPatients() {
-  return api.get<unknown, { patient_list: any[] }>('/api/doctor/my-patients')
+  return api.get('/api/doctor/my-patients')
 }
 
 // 提交授权申请
-export function getDoctorProfile() {
-  return api.get<unknown, {
-    user_id: number
-    username: string
-    name: string
-    department: string | null
-    license_no: string | null
-    verified: boolean
-  }>('/api/doctor/me')
-}
-
 export function submitAccessRequest(data: any) {
   return api.post('/api/doctor/access-requests', data)
 }
 
 // 获取脱敏病历
 export function getPatientRecord(patientId: number) {
-  return api.get<unknown, { medical_record: any }>(`/api/doctor/patients/${patientId}/records`)
+  return api.get(`/api/doctor/patients/${patientId}/records`)
 }
 
-export function updatePatientRecord(patientId: number, recordId: number, record: Record<string, unknown>) {
+// 更新病历记录（覆盖已有记录）
+export function updatePatientRecord(patientId: number, recordId: number, record: any) {
   return api.put(`/api/doctor/patients/${patientId}/records/${recordId}`, { record })
+}
+
+// 新增病历记录（追加新记录）
+export function addPatientRecord(patientId: number, record: any) {
+  return api.post(`/api/doctor/patients/${patientId}/records`, { record })
 }
