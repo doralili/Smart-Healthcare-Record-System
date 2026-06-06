@@ -384,16 +384,21 @@ def get_patient_mask_record(
             "name": cond.get("code", ""),
             "department": cond.get("department","Not Classified"),
             "status": cond.get("clinical_status", "active"),
-            "date": cond.get("recorded_date", "")[:10] if cond.get("recorded_date") else "",
-            "encounter_id": cond.get("encounter_id")
+            "date": cond.get("recorded_date", ""),
+            "recorded_date": cond.get("recorded_date", ""),
+            "encounter_id": cond.get("encounter_id"),
+            "related_encounters": cond.get("related_encounters", []),
+            "related_medications": cond.get("related_medications", []),
+            "related_observations": cond.get("related_observations", []),
+            "related_procedures": cond.get("related_procedures", []),
         } for cond in conds]
     
     # 9. 构建用药列表
     def build_medications_list(meds):
         return [{
             "name": med.get("medication", ""),
-            "start_date": med.get("authored_on", "")[:10] if med.get("authored_on") else "",
-            "stop_date": med.get("stop_date", "")[:10] if med.get("stop_date") else ""
+            "start_date": med.get("authored_on", ""),
+            "stop_date": med.get("stop_date", "")
         } for med in meds if med.get("medication")]
     
     # 10. 构建检查结果列表
@@ -401,14 +406,14 @@ def get_patient_mask_record(
         return [{
             "test_name": obs.get("code", ""),
             "value": obs.get("value", ""),
-            "date": obs.get("effective_datetime", "")[:10] if obs.get("effective_datetime") else ""
+            "date": obs.get("effective_datetime", "")
         } for obs in obs if obs.get("code")]
     
     # 11. 构建手术列表
     def build_procedures_list(procs):
         return [{
             "name": proc.get("code", ""),
-            "date": proc.get("performed_datetime", "")[:10] if proc.get("performed_datetime") else ""
+            "date": proc.get("performed_datetime", "")
         } for proc in procs if proc.get("code")]
     
     # 12. 按授权范围返回

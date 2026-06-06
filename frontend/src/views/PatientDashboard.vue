@@ -77,10 +77,10 @@ const auth = useAuthStore();
 const loading = ref(false);
 const selectedRecord = ref<PatientRecordDetail | null>(null);
 const diagnosisDateQuery = ref("");
-const diagnosisDepartmentQuery = ref("");
+const visitDetailKeywordQuery = ref("");
+const visitDetailDepartmentFilter = ref("");
 const selectedVisit = ref<VisitRow | null>(null);
 const visitDrawerVisible = ref(false);
-const selectedVisitDepartmentFilter = ref("");
 
 // 新增：授权管理相关状态
 const activeTab = ref('records')
@@ -125,16 +125,25 @@ const diagnosisRows = computed<DiagnosisRow[]>(() => {
 
 const visitRows = computed<VisitRow[]>(() => {
   const grouped = new Map<string, VisitRow>();
-  const encounterRows = buildTimelineRows("encounters");
-  const medicationRows = buildTimelineRows("medications");
-  const observationRows = buildTimelineRows("observations");
-  const procedureRows = buildTimelineRows("procedures");
 
   diagnosisRows.value.forEach((diagnosis) => {
-    const relatedEncounters = encounterRows.filter((row) => isRelatedToDiagnosis(row, diagnosis));
-    const relatedMedications = medicationRows.filter((row) => isRelatedToDiagnosis(row, diagnosis));
-    const relatedObservations = observationRows.filter((row) => isRelatedToDiagnosis(row, diagnosis));
-    const relatedProcedures = procedureRows.filter((row) => isRelatedToDiagnosis(row, diagnosis));
+    const diagnosisSource = asRecord(diagnosis.raw[0]);
+    const relatedEncounters = buildTimelineRowsFromItems(
+      "encounters",
+      Array.isArray(diagnosisSource.related_encounters) ? diagnosisSource.related_encounters : [],
+    );
+    const relatedMedications = buildTimelineRowsFromItems(
+      "medications",
+      Array.isArray(diagnosisSource.related_medications) ? diagnosisSource.related_medications : [],
+    );
+    const relatedObservations = buildTimelineRowsFromItems(
+      "observations",
+      Array.isArray(diagnosisSource.related_observations) ? diagnosisSource.related_observations : [],
+    );
+    const relatedProcedures = buildTimelineRowsFromItems(
+      "procedures",
+      Array.isArray(diagnosisSource.related_procedures) ? diagnosisSource.related_procedures : [],
+    );
     const firstEncounter = relatedEncounters[0];
     const key = getVisitGroupKey(
       firstEncounter?.encounterId || diagnosis.encounterId,
@@ -164,28 +173,8 @@ const visitRows = computed<VisitRow[]>(() => {
     refreshVisitSummary(visit);
   });
 
-  encounterRows.forEach((encounter, index) => {
-    const key = getVisitGroupKey(encounter.encounterId, encounter.dateKey, `encounter-${index}`);
-    if (grouped.has(key)) {
-      return;
-    }
-
-    const visit = ensureVisit(grouped, key, {
-      encounter,
-      date: encounter.date,
-      rawDate: encounter.rawDate,
-      dateKey: encounter.dateKey,
-      encounterId: encounter.encounterId,
-      status: encounter.status,
-    });
-    refreshVisitSummary(visit);
-  });
-
   return Array.from(grouped.values()).filter((visit) =>
-    visit.diagnoses.length > 0 ||
-    visit.medications.length > 0 ||
-    visit.observations.length > 0 ||
-    visit.procedures.length > 0
+    visit.diagnoses.length > 0
   ).sort((first, second) => {
     if (first.dateValue === null && second.dateValue === null) {
       return first.title.localeCompare(second.title);
@@ -197,34 +186,32 @@ const visitRows = computed<VisitRow[]>(() => {
 });
 
 const filteredVisitRows = computed(() => {
-  const query = normalizeSearchText(diagnosisDateQuery.value);
-  const departmentQuery = normalizeSearchText(diagnosisDepartmentQuery.value);
+  const dateQuery = normalizeSearchText(diagnosisDateQuery.value);
 
-  if (!query && !departmentQuery) {
+  if (!dateQuery) {
     return visitRows.value;
   }
 
-  return visitRows.value.filter((item) => {
-    const searchable = normalizeSearchText(
-      [
-        item.title,
-        item.departments,
-        item.visitTypes,
-        item.classes,
-        item.statuses,
-        item.date,
-        item.rawDate,
-        formatDateOnly(item.rawDate),
-        item.diagnoses.map((diagnosis) => diagnosis.diagnosis).join(" "),
-      ].join(" "),
-    );
+  return visitRows.value
+    .filter((item) => {
+      if (!dateQuery) {
+        return true;
+      }
 
-    const department = normalizeSearchText(item.departments);
-    const matchesKeyword = !query || searchable.includes(query);
-    const matchesDepartment = !departmentQuery || department.includes(departmentQuery);
+      const dateSearchable = normalizeSearchText(
+        [
+          item.title,
+          item.date,
+          item.rawDate,
+          item.dateKey,
+          formatDateOnly(item.rawDate),
+          item.diagnoses.map((diagnosis) => diagnosis.date).join(" "),
+          item.diagnoses.map((diagnosis) => diagnosis.rawDate).join(" "),
+        ].join(" "),
+      );
 
-    return matchesKeyword && matchesDepartment;
-  });
+      return dateSearchable.includes(dateQuery);
+    });
 });
 
 const overviewItems = computed(() => [
@@ -261,63 +248,44 @@ const filteredAvailableDoctors = computed(() => {
   );
 });
 
+const filteredSelectedDiagnoses = computed(() => {
+  if (!selectedVisit.value) {
+    return [];
+  }
+
+  const query = normalizeSearchText(visitDetailKeywordQuery.value);
+  const department = normalizeSearchText(visitDetailDepartmentFilter.value);
+
+  return selectedVisit.value.diagnoses.filter((diagnosis) =>
+    (!department || normalizeSearchText(diagnosis.department) === department) &&
+    (!query || diagnosisMatchesKeyword(diagnosis, query)),
+  );
+});
+
 const selectedVisitDepartmentOptions = computed(() => {
   if (!selectedVisit.value) {
     return [];
   }
 
-  const departments = [
-    ...selectedVisit.value.diagnoses.map((item) => item.department),
-    ...selectedVisit.value.medications.map((item) => item.department || ""),
-    ...selectedVisit.value.observations.map((item) => item.department || ""),
-    ...selectedVisit.value.procedures.map((item) => item.department || ""),
-  ]
-    .flatMap(splitDepartments)
-    .filter((item) => item && item !== "Not recorded");
+  const departments = selectedVisit.value.diagnoses
+    .map((diagnosis) => diagnosis.department.trim())
+    .filter(Boolean);
 
   return Array.from(new Set(departments)).sort((first, second) =>
     first.localeCompare(second),
   );
 });
 
-const filteredSelectedDiagnoses = computed(() => {
-  if (!selectedVisit.value) {
-    return [];
-  }
-
-  return selectedVisit.value.diagnoses.filter((item) =>
-    departmentMatchesFilter(item.department, selectedVisitDepartmentFilter.value),
-  );
-});
-
 const filteredSelectedMedications = computed(() => {
-  if (!selectedVisit.value) {
-    return [];
-  }
-
-  return selectedVisit.value.medications.filter((item) =>
-    departmentMatchesFilter(item.department, selectedVisitDepartmentFilter.value),
-  );
+  return buildRowsForDiagnoses("medications", filteredSelectedDiagnoses.value);
 });
 
 const filteredSelectedObservations = computed(() => {
-  if (!selectedVisit.value) {
-    return [];
-  }
-
-  return selectedVisit.value.observations.filter((item) =>
-    departmentMatchesFilter(item.department, selectedVisitDepartmentFilter.value),
-  );
+  return buildRowsForDiagnoses("observations", filteredSelectedDiagnoses.value);
 });
 
 const filteredSelectedProcedures = computed(() => {
-  if (!selectedVisit.value) {
-    return [];
-  }
-
-  return selectedVisit.value.procedures.filter((item) =>
-    departmentMatchesFilter(item.department, selectedVisitDepartmentFilter.value),
-  );
+  return buildRowsForDiagnoses("procedures", filteredSelectedDiagnoses.value);
 });
 
 function canSelectDefaultDoctor(doctor: AvailableDoctor) {
@@ -415,24 +383,6 @@ function formatPrimaryDepartment(value: unknown) {
     .filter(Boolean)[0] || "";
 }
 
-function splitDepartments(value: unknown) {
-  return formatDepartment(value)
-    .split(";")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function departmentMatchesFilter(department: unknown, filter: string) {
-  const normalizedFilter = normalizeSearchText(filter);
-  if (!normalizedFilter) {
-    return true;
-  }
-
-  return splitDepartments(department).some(
-    (item) => normalizeSearchText(item) === normalizedFilter,
-  );
-}
-
 function formatDateOnly(value: unknown) {
   if (!value) {
     return "Not recorded";
@@ -494,6 +444,10 @@ function formatDateKey(value: unknown) {
 
   const text = String(value);
 
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(text)) {
+    return text.slice(0, 16);
+  }
+
   if (/^\d{4}-\d{2}-\d{2}/.test(text)) {
     return text.slice(0, 10);
   }
@@ -501,10 +455,14 @@ function formatDateKey(value: unknown) {
   const date = new Date(String(value));
 
   if (Number.isNaN(date.getTime())) {
-    return text.slice(0, 10);
+    return text.slice(0, 16);
   }
 
-  return date.toISOString().slice(0, 10);
+  return date.toISOString().slice(0, 16);
+}
+
+function formatVisitTimeKey(value: string) {
+  return value.replace("T", " ");
 }
 
 function getEncounterId(source: Record<string, unknown>, allowOwnId = false) {
@@ -577,26 +535,39 @@ function getClinicalSummary(visit: VisitRow) {
   return sections.length ? sections.join(" | ") : "Not recorded";
 }
 
-function isRelatedToDiagnosis(item: TimelineRow, diagnosis: DiagnosisRow | null) {
-  if (!diagnosis) {
-    return false;
-  }
+function diagnosisMatchesKeyword(diagnosis: DiagnosisRow, query: string) {
+  const searchable = normalizeSearchText(
+    [
+      diagnosis.department,
+      diagnosis.diagnosis,
+      diagnosis.status,
+      diagnosis.date,
+      diagnosis.rawDate,
+    ].join(" "),
+  );
 
-  if (diagnosis.encounterId && item.encounterId && diagnosis.encounterId === item.encounterId) {
-    return true;
-  }
-
-  return Boolean(diagnosis.dateKey && item.dateKey && diagnosis.dateKey === item.dateKey);
+  return searchable.includes(query);
 }
 
-function buildTimelineRows(
-  category: "encounters" | "medications" | "observations" | "procedures",
-): TimelineRow[] {
-  if (!record.value) {
-    return [];
-  }
+function buildRowsForDiagnoses(
+  category: "medications" | "observations" | "procedures",
+  diagnoses: DiagnosisRow[],
+) {
+  const relatedKey = `related_${category}`;
+  const items = diagnoses.flatMap((diagnosis) => {
+    const source = asRecord(diagnosis.raw[0]);
+    const related = source[relatedKey];
+    return Array.isArray(related) ? related : [];
+  });
 
-  const rows = (record.value[category] ?? []).map((item: unknown): TimelineRow => {
+  return dedupeRelatedRows(buildTimelineRowsFromItems(category, items));
+}
+
+function buildTimelineRowsFromItems(
+  category: "encounters" | "medications" | "observations" | "procedures",
+  items: unknown[],
+): TimelineRow[] {
+  const rows = items.flatMap((item: unknown): TimelineRow[] => {
     const source = asRecord(item);
 
     if (category === "encounters") {
@@ -605,7 +576,7 @@ function buildTimelineRows(
       const date = formatDateTime(source.start);
       const type = cleanMedicalText(source.class);
 
-      return {
+      return [{
         key: buildRelatedRowKey(category, source, [name, status, date, type]),
         category: "Visit",
         name,
@@ -615,76 +586,74 @@ function buildTimelineRows(
         dateKey: formatDateKey(source.start),
         encounterId: getEncounterId(source, true),
         type,
-      };
+      }];
     }
 
     if (category === "medications") {
       const name = cleanMedicalText(source.medication);
-      const department = formatDepartment(source.department);
+      if (name === "Not recorded") {
+        return [];
+      }
+
       const status = formatStatus(source.status);
       const date = formatDateTime(source.authored_on);
 
-      return {
+      return [{
         key: buildRelatedRowKey(category, source, [name, status, date]),
         category: "Medication",
         name,
-        department,
         status,
         date,
         rawDate: source.authored_on,
         dateKey: formatDateKey(source.authored_on),
         encounterId: getEncounterId(source),
-      };
+      }];
     }
 
     if (category === "observations") {
       const name = cleanMedicalText(source.code);
       const value = formatValue(source.value);
-      const department = formatDepartment(source.department);
       const status = formatStatus(source.status);
       const date = formatDateTime(source.effective_datetime);
 
-      return {
+      return [{
         key: buildRelatedRowKey(category, source, [name, value, status, date]),
         category: "Lab / Vital",
         name,
         value,
-        department,
         status,
         date,
         rawDate: source.effective_datetime,
         dateKey: formatDateKey(source.effective_datetime),
         encounterId: getEncounterId(source),
-      };
+      }];
     }
 
     const name = cleanMedicalText(source.code);
-    const department = formatDepartment(source.department);
     const status = formatStatus(source.status);
     const date = formatDateTime(source.performed_datetime);
 
-    return {
+    return [{
       key: buildRelatedRowKey(category, source, [name, status, date]),
       category: "Procedure",
       name,
-      department,
       status,
       date,
       rawDate: source.performed_datetime,
       dateKey: formatDateKey(source.performed_datetime),
       encounterId: getEncounterId(source),
-    };
+    }];
   });
 
   return dedupeRelatedRows(rows);
 }
 
 function getVisitGroupKey(encounterId: string | null, dateKey: string, fallback: string) {
-  if (dateKey) {
-    return `date:${dateKey}`;
-  }
   if (encounterId) {
     return `encounter:${encounterId}`;
+  }
+  if (dateKey) {
+    return `date:${dateKey}`;
   }
   return fallback;
 }
@@ -709,7 +678,7 @@ function ensureVisit(
 
   const visit: VisitRow = {
     key,
-    title: seed.dateKey ? `Visit ${seed.dateKey}` : seed.encounter?.name || "Visit Unknown",
+    title: seed.dateKey ? `Visit ${formatVisitTimeKey(seed.dateKey)}` : seed.encounter?.name || "Visit Unknown",
     date: seed.date,
     rawDate: seed.rawDate,
     dateValue: toTime(seed.rawDate),
@@ -748,7 +717,7 @@ function refreshVisitSummary(visit: VisitRow) {
 
   visit.visitTypes = getVisitTypes(visit.encounters);
   visit.classes = getVisitClasses(visit.encounters);
-  visit.title = visit.dateKey ? `Visit ${visit.dateKey}` : visit.visitTypes;
+  visit.title = visit.dateKey ? `Visit ${formatVisitTimeKey(visit.dateKey)}` : visit.visitTypes;
   visit.clinicalSummary = getClinicalSummary(visit);
   visit.dateValue = toTime(visit.rawDate);
 }
@@ -780,7 +749,8 @@ function dedupeRelatedRows(rows: TimelineRow[]) {
 
 function openVisit(row: VisitRow) {
   selectedVisit.value = row;
-  selectedVisitDepartmentFilter.value = "";
+  visitDetailKeywordQuery.value = "";
+  visitDetailDepartmentFilter.value = "";
   visitDrawerVisible.value = true;
 }
 
@@ -1035,13 +1005,7 @@ onUnmounted(() => {
                       v-model="diagnosisDateQuery"
                       clearable
                       class="record-filter"
-                      placeholder="Search by date, e.g. 2024, 2024-05, 2024-05-20"
-                    />
-                    <el-input
-                      v-model="diagnosisDepartmentQuery"
-                      clearable
-                      class="department-filter"
-                      placeholder="Search by department"
+                      placeholder="Search by time, e.g. 2024, 2024-05-20, 2024-05-20 14:30"
                     />
                   </div>
                 </div>
@@ -1115,11 +1079,11 @@ onUnmounted(() => {
 
                 <section class="drawer-section drawer-filter-section">
                   <el-select
-                    v-model="selectedVisitDepartmentFilter"
+                    v-model="visitDetailDepartmentFilter"
                     clearable
                     filterable
-                    class="drawer-department-filter"
-                    placeholder="Filter by department"
+                    class="drawer-filter-control"
+                    placeholder="Department"
                   >
                     <el-option
                       v-for="department in selectedVisitDepartmentOptions"
@@ -1128,6 +1092,12 @@ onUnmounted(() => {
                       :value="department"
                     />
                   </el-select>
+                  <el-input
+                    v-model="visitDetailKeywordQuery"
+                    clearable
+                    class="drawer-filter-control"
+                    placeholder="Diagnosis"
+                  />
                 </section>
 
                 <section class="drawer-section">
@@ -1149,9 +1119,8 @@ onUnmounted(() => {
                   <el-table
                     :data="filteredSelectedMedications"
                     border
-                    empty-text="No medication found for this visit."
+                    empty-text="No medication found for this diagnosis date."
                   >
-                    <el-table-column prop="department" label="Department" width="170" />
                     <el-table-column prop="name" label="Medication" min-width="280" />
                     <el-table-column prop="status" label="Status" width="140" />
                     <el-table-column prop="date" label="Prescribed At" width="190" />
@@ -1163,9 +1132,8 @@ onUnmounted(() => {
                   <el-table
                     :data="filteredSelectedObservations"
                     border
-                    empty-text="No lab or vital result found for this visit."
+                    empty-text="No lab or vital result found for this diagnosis date."
                   >
-                    <el-table-column prop="department" label="Department" width="170" />
                     <el-table-column prop="name" label="Item" min-width="240" />
                     <el-table-column prop="value" label="Result" min-width="180" />
                     <el-table-column prop="status" label="Status" width="140" />
@@ -1178,9 +1146,8 @@ onUnmounted(() => {
                   <el-table
                     :data="filteredSelectedProcedures"
                     border
-                    empty-text="No procedure found for this visit."
+                    empty-text="No procedure found for this diagnosis date."
                   >
-                    <el-table-column prop="department" label="Department" width="170" />
                     <el-table-column prop="name" label="Procedure" min-width="280" />
                     <el-table-column prop="status" label="Status" width="140" />
                     <el-table-column prop="date" label="Date" width="190" />
@@ -1482,10 +1449,12 @@ h3 {
 
 .drawer-filter-section {
   display: flex;
+  gap: 12px;
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
-.drawer-department-filter {
+.drawer-filter-control {
   width: min(280px, 100%);
 }
 
@@ -1511,7 +1480,7 @@ h3 {
   .record-filters,
   .record-filter,
   .department-filter,
-  .drawer-department-filter {
+  .drawer-filter-control {
     width: 100%;
   }
 

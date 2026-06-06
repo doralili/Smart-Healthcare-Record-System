@@ -33,6 +33,8 @@ const applyForm = ref({
 // 诊断详情弹窗
 const visitDetailVisible = ref(false)
 const selectedVisit = ref<any>(null)
+const visitDetailKeywordQuery = ref('')
+const visitDetailDepartmentFilter = ref('')
 
 // 新增病历表单
 const newRecordForm = ref<{
@@ -68,8 +70,6 @@ const getBeijingDateTimeValue = (date = new Date()) => {
   return `${valueByType.year}-${valueByType.month}-${valueByType.day}T${valueByType.hour}:${valueByType.minute}:${valueByType.second}`
 }
 
-const getBeijingDateValue = () => getBeijingDateTimeValue().slice(0, 10)
-
 // 日期格式化函数
 const formatDate = (dateStr: string) => {
   if (!dateStr) return ''
@@ -93,7 +93,11 @@ const formatDateTime = (dateStr: string) => {
 // 获取诊断相关的就诊记录（按日期匹配）
 const getDateKey = (value: any) => {
   if (!value) return ''
-  return String(value).slice(0, 10)
+  const text = String(value)
+  if (text.length >= 16 && ['T', ' '].includes(text[10])) {
+    return text.slice(0, 16)
+  }
+  return text.slice(0, 10)
 }
 
 const getEncounterId = (record: any) => {
@@ -114,38 +118,12 @@ const getClinicalDateKey = (record: any) =>
     record?.date
   )
 
-const isRelatedToDiagnosis = (record: any, diagnosis: any) => {
-  const recordEncounterId = getEncounterId(record)
-  const diagnosisEncounterId = getEncounterId(diagnosis)
-
-  if (recordEncounterId && diagnosisEncounterId && recordEncounterId === diagnosisEncounterId) {
-    return true
-  }
-
-  const recordDate = getClinicalDateKey(record)
-  const diagnosisDate = getClinicalDateKey(diagnosis)
-  return Boolean(recordDate && diagnosisDate && recordDate === diagnosisDate)
-}
-
-const getRelatedRecords = (
-  category: 'encounters' | 'medications' | 'observations' | 'procedures',
-  diagnosis: any
-) => {
-  const rows = currentRecord.value?.raw_record?.[category]
-  if (!Array.isArray(rows)) return []
-  return rows.filter((row: any) => isRelatedToDiagnosis(row, diagnosis))
-}
-
-const getRelatedEncounters = (diagnosis: any) => getRelatedRecords('encounters', diagnosis)
 
 // 获取诊断相关的用药记录（按日期匹配）
-const getRelatedMedications = (diagnosis: any) => getRelatedRecords('medications', diagnosis)
 
 // 获取诊断相关的检查结果（按日期匹配）
-const getRelatedObservations = (diagnosis: any) => getRelatedRecords('observations', diagnosis)
 
 // 获取诊断相关的手术记录（按日期匹配）
-const getRelatedProcedures = (diagnosis: any) => getRelatedRecords('procedures', diagnosis)
 
 const joinUnique = (values: any[], fallback = 'Not recorded') => {
   const unique = values
@@ -156,16 +134,77 @@ const joinUnique = (values: any[], fallback = 'Not recorded') => {
 }
 
 const collectVisitDepartments = (visit: any) => {
-  const values = [
-    ...visit.diagnoses.map((item: any) => item.department),
-    ...visit.medications.map((item: any) => item.department),
-    ...visit.observations.map((item: any) => item.department),
-    ...visit.procedures.map((item: any) => item.department),
-    ...visit.encounters.map((item: any) => item.department),
-  ]
+  const values = visit.diagnoses.map((item: any) => item.department)
 
   return joinUnique(values, '')
 }
+
+const diagnosisMatchesKeyword = (diagnosis: any, query: string) => {
+  const searchable = [
+    diagnosis.department,
+    diagnosis.name,
+    diagnosis.status,
+    diagnosis.date,
+  ].join(' ').toLowerCase()
+
+  return searchable.includes(query)
+}
+
+const selectedVisitDepartmentOptions = computed(() => {
+  if (!selectedVisit.value) return []
+  const departments = selectedVisit.value.diagnoses
+    .map((diagnosis: any) => String(diagnosis.department || '').trim())
+    .filter(Boolean)
+  return Array.from(new Set(departments)).sort()
+})
+
+const filteredSelectedDiagnoses = computed(() => {
+  if (!selectedVisit.value) return []
+  const query = visitDetailKeywordQuery.value.trim().toLowerCase()
+  const department = visitDetailDepartmentFilter.value.trim().toLowerCase()
+  return selectedVisit.value.diagnoses.filter((diagnosis: any) =>
+    (!department || String(diagnosis.department || '').trim().toLowerCase() === department) &&
+    (!query || diagnosisMatchesKeyword(diagnosis, query))
+  )
+})
+
+const dedupeById = (rows: any[]) => {
+  const seen = new Set<string>()
+  return rows.filter((row) => {
+    const key = String(row?.id || JSON.stringify(row))
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+const hasRecordedText = (value: any) => {
+  const text = String(value ?? '').trim().toLowerCase()
+  return Boolean(text && !['not recorded', 'norecord', 'unknown', 'none', 'null'].includes(text))
+}
+
+const filterRecordedMedications = (rows: any[]) =>
+  rows.filter((row) => hasRecordedText(row?.medication))
+
+const selectedVisitMedications = computed(() =>
+  filterRecordedMedications(
+    dedupeById(filteredSelectedDiagnoses.value.flatMap((diagnosis: any) =>
+      diagnosis.related_medications || []
+    ))
+  )
+)
+
+const selectedVisitObservations = computed(() =>
+  dedupeById(filteredSelectedDiagnoses.value.flatMap((diagnosis: any) =>
+    diagnosis.related_observations || []
+  ))
+)
+
+const selectedVisitProcedures = computed(() =>
+  dedupeById(filteredSelectedDiagnoses.value.flatMap((diagnosis: any) =>
+    diagnosis.related_procedures || []
+  ))
+)
 
 const resolveVisitGroupKey = (
   grouped: Map<string, any>,
@@ -211,10 +250,12 @@ const visitRows = computed(() => {
   const grouped = new Map<string, any>()
 
   for (const diagnosis of diagnoses) {
-    const encounters = getRelatedEncounters(diagnosis)
-    const medications = getRelatedMedications(diagnosis)
-    const observations = getRelatedObservations(diagnosis)
-    const procedures = getRelatedProcedures(diagnosis)
+    const encounters = Array.isArray(diagnosis.related_encounters) ? diagnosis.related_encounters : []
+    const medications = filterRecordedMedications(
+      Array.isArray(diagnosis.related_medications) ? diagnosis.related_medications : []
+    )
+    const observations = Array.isArray(diagnosis.related_observations) ? diagnosis.related_observations : []
+    const procedures = Array.isArray(diagnosis.related_procedures) ? diagnosis.related_procedures : []
     const firstEncounter = encounters[0]
     const diagnosisEncounterId = getEncounterId(diagnosis)
     const diagnosisDateKey = getClinicalDateKey(diagnosis)
@@ -256,85 +297,8 @@ const visitRows = computed(() => {
     }
   }
 
-  const encounters = currentRecord.value?.raw_record?.encounters || []
-  encounters.forEach((encounter: any, index: number) => {
-    const encounterId = getEncounterId(encounter)
-    const encounterDateKey = getClinicalDateKey(encounter)
-    const key = resolveVisitGroupKey(grouped, encounterId, encounterDateKey, `encounter:${index}`)
-
-    if (grouped.has(key)) {
-      return
-    }
-
-    grouped.set(key, {
-      key,
-      dateKey: encounterDateKey,
-      date: encounter.start,
-      department: encounter.department || '',
-      visitType: encounter.type || VISIT_TYPE_FALLBACK,
-      class: encounter.class || VISIT_CLASS_FALLBACK,
-      status: encounter.status || 'Not recorded',
-      diagnoses: [],
-      encounters: [encounter],
-      medications: [],
-      observations: [],
-      procedures: [],
-    })
-
-    const createdVisit = grouped.get(key)
-    if (createdVisit) {
-      createdVisit.department = collectVisitDepartments(createdVisit)
-    }
-  })
-
-  const attachClinicalRows = (
-    category: 'medications' | 'observations' | 'procedures',
-    fallbackPrefix: string,
-  ) => {
-    const rows = currentRecord.value?.raw_record?.[category] || []
-    rows.forEach((row: any, index: number) => {
-      const rowEncounterId = getEncounterId(row)
-      const rowDateKey = getClinicalDateKey(row)
-      const key = resolveVisitGroupKey(grouped, rowEncounterId, rowDateKey, `${fallbackPrefix}:${index}`)
-      const existing = grouped.get(key)
-
-      if (existing) {
-        existing[category] = dedupeRecords([...existing[category], row])
-        existing.department = collectVisitDepartments(existing)
-        return
-      }
-
-      grouped.set(key, {
-        key,
-        dateKey: rowDateKey,
-        date: row.authored_on || row.effective_datetime || row.performed_datetime || rowDateKey,
-        department: row.department || '',
-        visitType: VISIT_TYPE_FALLBACK,
-        class: VISIT_CLASS_FALLBACK,
-        status: row.status || 'Not recorded',
-        diagnoses: [],
-        encounters: [],
-        medications: category === 'medications' ? [row] : [],
-        observations: category === 'observations' ? [row] : [],
-        procedures: category === 'procedures' ? [row] : [],
-      })
-
-      const createdVisit = grouped.get(key)
-      if (createdVisit) {
-        createdVisit.department = collectVisitDepartments(createdVisit)
-      }
-    })
-  }
-
-  attachClinicalRows('medications', 'medication')
-  attachClinicalRows('observations', 'observation')
-  attachClinicalRows('procedures', 'procedure')
-
   return Array.from(grouped.values()).filter((visit) =>
-    visit.diagnoses.length > 0 ||
-    visit.medications.length > 0 ||
-    visit.observations.length > 0 ||
-    visit.procedures.length > 0
+    visit.diagnoses.length > 0
   ).sort((first, second) => {
     const firstTime = new Date(first.date || '').getTime()
     const secondTime = new Date(second.date || '').getTime()
@@ -418,6 +382,8 @@ const openRecord = async (patient: any) => {
 
 const viewVisitDetail = (visit: any) => {
   selectedVisit.value = visit
+  visitDetailKeywordQuery.value = ''
+  visitDetailDepartmentFilter.value = ''
   visitDetailVisible.value = true
 }
 
@@ -447,7 +413,7 @@ const addCondition = () => {
   newRecordForm.value.conditions.push({
     code: '',
     clinical_status: 'active',
-    recorded_date: getBeijingDateValue()
+    recorded_date: getBeijingDateTimeValue()
   })
 }
 
@@ -527,11 +493,11 @@ const saveNewRecord = async () => {
   const recordTime = Date.now()
   for (const [index, encounter] of newRecordForm.value.encounters.entries()) {
     encounter.id = encounter.id || `doctor-encounter-${recordTime}-${index + 1}`
-    encounter.department = globalDepartment.value
+    delete encounter.department
   }
 
   const primaryEncounterId = newRecordForm.value.encounters[0]?.id || ''
-  const applyRecordMetadata = (items: any[]) => {
+  const applyConditionMetadata = (items: any[]) => {
     for (const item of items) {
       item.department = globalDepartment.value
       if (primaryEncounterId && !item.encounter_id) {
@@ -540,10 +506,19 @@ const saveNewRecord = async () => {
     }
   }
 
-  applyRecordMetadata(newRecordForm.value.conditions)
-  applyRecordMetadata(newRecordForm.value.observations)
-  applyRecordMetadata(newRecordForm.value.medications)
-  applyRecordMetadata(newRecordForm.value.procedures)
+  const applyVisitLink = (items: any[]) => {
+    for (const item of items) {
+      delete item.department
+      if (primaryEncounterId && !item.encounter_id) {
+        item.encounter_id = primaryEncounterId
+      }
+    }
+  }
+
+  applyConditionMetadata(newRecordForm.value.conditions)
+  applyVisitLink(newRecordForm.value.observations)
+  applyVisitLink(newRecordForm.value.medications)
+  applyVisitLink(newRecordForm.value.procedures)
 
   const hasData = 
     newRecordForm.value.encounters.length > 0 ||
@@ -1029,7 +1004,7 @@ onMounted(() => {
           <el-table-column prop="class" label="Class" width="120" />
           <el-table-column label="Date" width="160">
             <template #default="{ row }">
-              {{ formatDate(row.date) }}
+              {{ formatDateTime(row.date) }}
             </template>
           </el-table-column>
           <el-table-column label="Diagnoses" width="100">
@@ -1075,8 +1050,29 @@ onMounted(() => {
           <el-descriptions-item label="Date">{{ formatDateTime(selectedVisit.date) }}</el-descriptions-item>
         </el-descriptions>
 
+        <div class="visit-detail-filters mb-4">
+          <el-select
+            v-model="visitDetailDepartmentFilter"
+            clearable
+            filterable
+            placeholder="Department"
+          >
+            <el-option
+              v-for="department in selectedVisitDepartmentOptions"
+              :key="department"
+              :label="department"
+              :value="department"
+            />
+          </el-select>
+          <el-input
+            v-model="visitDetailKeywordQuery"
+            clearable
+            placeholder="Diagnosis"
+          />
+        </div>
+
         <h3 class="font-bold mb-2">Diagnoses</h3>
-        <el-table :data="selectedVisit.diagnoses" border class="mb-4">
+        <el-table :data="filteredSelectedDiagnoses" border class="mb-4">
           <el-table-column prop="department" label="Department" width="150" />
           <el-table-column prop="name" label="Diagnosis" min-width="260" />
           <el-table-column prop="status" label="Status" width="140" />
@@ -1088,7 +1084,7 @@ onMounted(() => {
         </el-table>
 
         <h3 class="font-bold mb-2">Medications</h3>
-        <el-table :data="selectedVisit.medications" border class="mb-4">
+        <el-table :data="selectedVisitMedications" border class="mb-4">
           <el-table-column prop="medication" label="Medication" min-width="280" />
           <el-table-column prop="status" label="Status" width="140" />
           <el-table-column label="Prescribed At" width="190">
@@ -1099,7 +1095,7 @@ onMounted(() => {
         </el-table>
 
         <h3 class="font-bold mb-2">Lab / Vital Results</h3>
-        <el-table :data="selectedVisit.observations" border class="mb-4">
+        <el-table :data="selectedVisitObservations" border class="mb-4">
           <el-table-column prop="code" label="Item" min-width="260" />
           <el-table-column prop="value" label="Result" min-width="180" />
           <el-table-column prop="status" label="Status" width="140" />
@@ -1111,7 +1107,7 @@ onMounted(() => {
         </el-table>
 
         <h3 class="font-bold mb-2">Procedures</h3>
-        <el-table :data="selectedVisit.procedures" border class="mb-4">
+        <el-table :data="selectedVisitProcedures" border class="mb-4">
           <el-table-column prop="code" label="Procedure" min-width="280" />
           <el-table-column prop="status" label="Status" width="140" />
           <el-table-column label="Date" width="190">
@@ -1213,10 +1209,10 @@ onMounted(() => {
               <template #default="{ $index }">
                 <el-date-picker
                   v-model="newRecordForm.conditions[$index].recorded_date"
-                  type="date"
-                  placeholder="Select date"
-                  format="YYYY-MM-DD"
-                  value-format="YYYY-MM-DD"
+                  type="datetime"
+                  placeholder="Select date and time"
+                  format="YYYY-MM-DD HH:mm"
+                  value-format="YYYY-MM-DDTHH:mm:ss"
                   style="width: 100%"
                 />
               </template>
@@ -1449,6 +1445,12 @@ onMounted(() => {
   gap: 4px;
   color: #606266;
   font-size: 13px;
+}
+
+.visit-detail-filters {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(240px, 1fr);
+  gap: 12px;
 }
 
 .form-section {

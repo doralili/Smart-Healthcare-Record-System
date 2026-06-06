@@ -352,7 +352,6 @@ def parse_observation(resource: dict[str, Any]) -> dict[str, Any]:
         "status": resource.get("status"),
         "code": code,
         "value": value,
-        "department": classify_department_for_text(code, value),
         "effective_datetime": resource.get("effectiveDateTime"),
     }
 
@@ -367,7 +366,6 @@ def parse_medication_request(resource: dict[str, Any]) -> dict[str, Any]:
         "status": resource.get("status"),
         "intent": resource.get("intent"),
         "medication": medication_text,
-        "department": classify_department_for_text(medication_text),
         "authored_on": resource.get("authoredOn"),
     }
 
@@ -383,7 +381,6 @@ def parse_procedure(resource: dict[str, Any]) -> dict[str, Any]:
         "encounter_id": get_reference_id(resource.get("encounter")),
         "status": resource.get("status"),
         "code": code,
-        "department": classify_department_for_text(code),
         "performed_datetime": performed,
     }
 

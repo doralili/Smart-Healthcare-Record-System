@@ -173,10 +173,15 @@ def apply_doctor_name(
     *,
     record_doctor_name: str | None,
     department_doctor_map: dict[str, str] | None = None,
+    allow_department_fallback: bool = True,
 ) -> dict:
     item_copy = item.copy()
     doctor_name = record_doctor_name
-    if is_placeholder_doctor_name(doctor_name) and department_doctor_map is not None:
+    if (
+        allow_department_fallback
+        and is_placeholder_doctor_name(doctor_name)
+        and department_doctor_map is not None
+    ):
         doctor_name = get_doctor_name_by_department(
             department_doctor_map,
             str(item.get("department") or ""),
@@ -253,6 +258,7 @@ def get_my_combined_records(
                         med,
                         record_doctor_name=doctor_name,
                         department_doctor_map=department_doctor_map,
+                        allow_department_fallback=False,
                     )
                 )
             
@@ -263,6 +269,7 @@ def get_my_combined_records(
                         obs,
                         record_doctor_name=doctor_name,
                         department_doctor_map=department_doctor_map,
+                        allow_department_fallback=False,
                     )
                 )
             
@@ -273,6 +280,7 @@ def get_my_combined_records(
                         proc,
                         record_doctor_name=doctor_name,
                         department_doctor_map=department_doctor_map,
+                        allow_department_fallback=False,
                     )
                 )
             
@@ -283,6 +291,7 @@ def get_my_combined_records(
                         enc,
                         record_doctor_name=doctor_name,
                         department_doctor_map=department_doctor_map,
+                        allow_department_fallback=False,
                     )
                 )
                 
@@ -796,6 +805,7 @@ def get_my_record_detail(
                 item,
                 record_doctor_name=record_doctor_name,
                 department_doctor_map=department_doctor_map,
+                allow_department_fallback=(key == "conditions"),
             )
             for item in decrypted_record.get(key, [])
             if isinstance(item, dict)
