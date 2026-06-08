@@ -231,6 +231,7 @@ def submit_access_request(
     )
     db.commit()
     return {"msg": "Access request submitted, waiting for patient approval"}
+
 # 查看脱敏后患者病历
 # 场景1/3/5：查看脱敏病历 + 权限校验 + 日志记录
 @router.get("/patients/{patient_id}/records")
@@ -326,6 +327,13 @@ def get_patient_mask_record(
             print(f"Decryption failed for record {record.id}: {e}")
             continue
     
+    # 构建 encounters 字典，方便按 encounter_id 查找就诊信息
+    encounters_map = {}
+    for enc in all_encounters:
+        enc_id = enc.get("id")
+        if enc_id:
+            encounters_map[enc_id] = enc
+    
     # 去重函数（根据 id 字段）
     def dedupe_by_id(items, key="id"):
         seen = set()
@@ -378,27 +386,43 @@ def get_patient_mask_record(
                 filtered.append(record)
         return filtered
     
-    # 8. 构建诊断列表
-    def build_diagnosis_list(conds):
-        return [{
-            "name": cond.get("code", ""),
-            "department": cond.get("department","Not Classified"),
-            "status": cond.get("clinical_status", "active"),
-            "date": cond.get("recorded_date", ""),
-            "recorded_date": cond.get("recorded_date", ""),
-            "encounter_id": cond.get("encounter_id"),
-            "related_encounters": cond.get("related_encounters", []),
-            "related_medications": cond.get("related_medications", []),
-            "related_observations": cond.get("related_observations", []),
-            "related_procedures": cond.get("related_procedures", []),
-        } for cond in conds]
+    # 8. 构建诊断列表（带 related_encounters，包含医生信息）
+    def build_diagnosis_list(conds, encounters_map):
+        """构建诊断列表，可选地关联就诊信息"""
+        result = []
+        for cond in conds:
+            encounter_id = cond.get("encounter_id")
+            related_encounters = []
+            
+            # 如果有 encounter_id，从 encounters_map 中获取对应的就诊信息
+            if encounter_id and encounter_id in encounters_map:
+                enc = encounters_map[encounter_id]
+                related_encounters = [{
+                    "id": enc.get("id"),
+                    "type": enc.get("type", ""),
+                    "class": enc.get("class", ""),
+                    "status": enc.get("status", ""),
+                    "start": enc.get("start", ""),
+                    "doctor_name": enc.get("doctor_name", ""),
+                    "doctor_department": enc.get("doctor_department", "")
+                }]
+            
+            result.append({
+                "name": cond.get("code", ""),
+                "department": cond.get("department", "Not Classified"),
+                "status": cond.get("clinical_status", "active"),
+                "date": cond.get("recorded_date", "")[:10] if cond.get("recorded_date") else "",
+                "encounter_id": encounter_id,
+                "related_encounters": related_encounters
+            })
+        return result
     
     # 9. 构建用药列表
     def build_medications_list(meds):
         return [{
             "name": med.get("medication", ""),
-            "start_date": med.get("authored_on", ""),
-            "stop_date": med.get("stop_date", "")
+            "start_date": med.get("authored_on", "")[:10] if med.get("authored_on") else "",
+            "stop_date": med.get("stop_date", "")[:10] if med.get("stop_date") else ""
         } for med in meds if med.get("medication")]
     
     # 10. 构建检查结果列表
@@ -406,14 +430,14 @@ def get_patient_mask_record(
         return [{
             "test_name": obs.get("code", ""),
             "value": obs.get("value", ""),
-            "date": obs.get("effective_datetime", "")
+            "date": obs.get("effective_datetime", "")[:10] if obs.get("effective_datetime") else ""
         } for obs in obs if obs.get("code")]
     
     # 11. 构建手术列表
     def build_procedures_list(procs):
         return [{
             "name": proc.get("code", ""),
-            "date": proc.get("performed_datetime", "")
+            "date": proc.get("performed_datetime", "")[:10] if proc.get("performed_datetime") else ""
         } for proc in procs if proc.get("code")]
     
     # 12. 按授权范围返回
@@ -435,7 +459,7 @@ def get_patient_mask_record(
             "lab_results": "Limited - apply full access to view",
             "medications": "Limited - apply full access to view",
             "procedures": "Limited - apply full access to view",
-            "diagnosis_list": build_diagnosis_list(filtered_conditions),
+            "diagnosis_list": build_diagnosis_list(filtered_conditions, encounters_map),
             "updated_at": latest_updated_at,
             "updated_by_doctor_id": latest_updated_by,
             "record_scope": scope,
@@ -457,7 +481,7 @@ def get_patient_mask_record(
             "lab_results": build_observations_list(all_observations),
             "medications": build_medications_list(all_medications),
             "procedures": build_procedures_list(all_procedures),
-            "diagnosis_list": build_diagnosis_list(all_conditions),
+            "diagnosis_list": build_diagnosis_list(all_conditions, encounters_map),
             "raw_record": {
                 "conditions": all_conditions,
                 "medications": all_medications,
@@ -641,8 +665,51 @@ def add_patient_record(
     if patient is None:
         raise HTTPException(status_code=404, detail="Patient not found")
     
+    # 获取医生信息，自动添加到记录中
+    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
+    doctor_name = doctor.name if doctor else current_user.username
+    doctor_department = doctor.department if doctor else ""
+    
+    # 处理记录数据，自动添加医生信息
+    record_data = normalize_clinical_record_links(payload.record)
+    
+    # 为所有 encounters 添加医生信息
+    for encounter in record_data.get("encounters", []):
+        if "doctor_name" not in encounter or not encounter["doctor_name"]:
+            encounter["doctor_name"] = doctor_name
+        if "doctor_department" not in encounter or not encounter["doctor_department"]:
+            encounter["doctor_department"] = doctor_department
+    
+    # 为所有 conditions 添加医生信息
+    for condition in record_data.get("conditions", []):
+        if "doctor_name" not in condition or not condition["doctor_name"]:
+            condition["doctor_name"] = doctor_name
+        if "doctor_department" not in condition or not condition["doctor_department"]:
+            condition["doctor_department"] = doctor_department
+    
+    # 为所有 observations 添加医生信息
+    for observation in record_data.get("observations", []):
+        if "doctor_name" not in observation or not observation["doctor_name"]:
+            observation["doctor_name"] = doctor_name
+        if "doctor_department" not in observation or not observation["doctor_department"]:
+            observation["doctor_department"] = doctor_department
+    
+    # 为所有 medications 添加医生信息
+    for medication in record_data.get("medications", []):
+        if "doctor_name" not in medication or not medication["doctor_name"]:
+            medication["doctor_name"] = doctor_name
+        if "doctor_department" not in medication or not medication["doctor_department"]:
+            medication["doctor_department"] = doctor_department
+    
+    # 为所有 procedures 添加医生信息
+    for procedure in record_data.get("procedures", []):
+        if "doctor_name" not in procedure or not procedure["doctor_name"]:
+            procedure["doctor_name"] = doctor_name
+        if "doctor_department" not in procedure or not procedure["doctor_department"]:
+            procedure["doctor_department"] = doctor_department
+    
     try:
-        encrypted_data, nonce = encrypt_record_json(normalize_clinical_record_links(payload.record))
+        encrypted_data, nonce = encrypt_record_json(record_data)
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Failed to encrypt medical record") from exc
     
