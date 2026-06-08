@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 
+import AuditorNav from "../components/AuditorNav.vue";
 import DashboardLayout from "../layouts/DashboardLayout.vue";
 import { ElMessage } from "../utils/message";
 import {
@@ -49,6 +50,31 @@ function shortHash(value: string | null) {
   return `${value.slice(0, 10)}...${value.slice(-8)}`;
 }
 
+function formatPatient(row: AuditLog) {
+  if (row.patient_name && row.patient_id !== null) {
+    return `${row.patient_name} (#${row.patient_id})`;
+  }
+
+  if (row.patient_id !== null) {
+    return `Patient #${row.patient_id}`;
+  }
+
+  return "-";
+}
+
+function formatDoctor(row: AuditLog) {
+  const doctorLabel = row.doctor_name || row.doctor_username;
+  if (doctorLabel && row.doctor_id !== null) {
+    return `${doctorLabel} (#${row.doctor_id})`;
+  }
+
+  if (row.doctor_id !== null) {
+    return `Doctor #${row.doctor_id}`;
+  }
+
+  return "-";
+}
+
 async function loadAuditData() {
   loading.value = true;
   try {
@@ -92,6 +118,8 @@ onMounted(async () => {
 <template>
   <DashboardLayout title="Auditor Dashboard">
     <section v-loading="loading" class="audit-page">
+      <AuditorNav />
+
       <section class="summary-grid">
         <el-card shadow="never">
           <span>Total Logs</span>
@@ -127,14 +155,7 @@ onMounted(async () => {
         </template>
 
         <el-alert
-          v-if="verifyResult?.valid"
-          title="Audit log hash chain is intact."
-          type="success"
-          show-icon
-          :closable="false"
-        />
-        <el-alert
-          v-else-if="verifyResult"
+          v-if="verifyResult && !verifyResult.valid"
           :title="`Audit chain broken at log #${verifyResult.broken_log_id}: ${verifyResult.reason}`"
           type="error"
           show-icon
@@ -173,8 +194,16 @@ onMounted(async () => {
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="patient_id" label="Patient" width="100" />
-          <el-table-column prop="doctor_id" label="Doctor" width="100" />
+          <el-table-column label="Patient" min-width="180" show-overflow-tooltip>
+            <template #default="{ row }">
+              {{ formatPatient(row) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="Doctor" min-width="180" show-overflow-tooltip>
+            <template #default="{ row }">
+              {{ formatDoctor(row) }}
+            </template>
+          </el-table-column>
           <el-table-column prop="record_scope" label="Scope" width="100" />
           <el-table-column prop="ip_address" label="IP" min-width="130" />
           <el-table-column prop="user_agent" label="User Agent" min-width="240" show-overflow-tooltip />
@@ -247,6 +276,7 @@ code {
   .summary-grid {
     grid-template-columns: repeat(2, minmax(150px, 1fr));
   }
+
 }
 
 @media (max-width: 640px) {

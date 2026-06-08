@@ -146,6 +146,7 @@ DEPARTMENT_KEYWORDS = {
 
 def normalize_clinical_record_links(clinical_data: RecordDict) -> RecordDict:
     normalized = dict(clinical_data)
+    normalized.pop("_security_watermark", None)
     encounters = [
         item
         for item in normalized.get("encounters", [])

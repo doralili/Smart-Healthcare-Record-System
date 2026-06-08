@@ -33,7 +33,10 @@ export interface AuditLog {
   target_type: string | null;
   target_id: number | null;
   doctor_id: number | null;
+  doctor_username: string | null;
+  doctor_name: string | null;
   patient_id: number | null;
+  patient_name: string | null;
   consent_id: number | null;
   record_scope: string | null;
   outcome: string;
@@ -60,6 +63,36 @@ export interface VerifyResult {
   actual_current_hash?: string;
 }
 
+export interface RecordWatermarkSummary {
+  total_records: number;
+  valid: number;
+  invalid: number;
+  missing: number;
+  decryption_failed: number;
+}
+
+export interface RecordWatermark {
+  record_id: number;
+  patient_id: number;
+  patient_name: string | null;
+  doctor_id: number | null;
+  doctor_username: string | null;
+  doctor_name: string | null;
+  source: string;
+  record_type: string;
+  created_at: string;
+  updated_at: string | null;
+  watermark_status: "VALID" | "INVALID" | "MISSING" | "DECRYPTION_FAILED";
+  watermark_message: string;
+  watermark_issued_at: string | null;
+  watermark_record_hash: string | null;
+}
+
+export interface RecordWatermarkResponse {
+  summary: RecordWatermarkSummary;
+  records: RecordWatermark[];
+}
+
 export function getAuditSummary() {
   return api.get<unknown, AuditSummary>("/api/auditor/summary");
 }
@@ -72,4 +105,8 @@ export function listAuditLogs(limit = 100) {
 
 export function verifyAuditHashChain() {
   return api.get<unknown, VerifyResult>("/api/auditor/verify-hash-chain");
+}
+
+export function listRecordWatermarks() {
+  return api.get<unknown, RecordWatermarkResponse>("/api/auditor/record-watermarks");
 }

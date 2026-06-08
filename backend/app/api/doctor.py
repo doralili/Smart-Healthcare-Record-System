@@ -15,6 +15,7 @@ from app.services.masking import mask_record_by_scope
 from app.services.clinical_records import filter_related_clinical_records, normalize_clinical_record_links
 from app.services.audit_service import request_audit_context, write_audit_log
 from app.services.crypto_service import MedicalRecordCryptoError, encrypt_record_json
+from app.services.record_watermark import embed_record_watermark
 
 router = APIRouter(prefix="/api/doctor", tags=["医生业务模块"])
 
@@ -762,15 +763,23 @@ def update_patient_record(
         **request_audit_context(request),
     )
 
+    updated_at = now_beijing()
+    record_data = embed_record_watermark(
+        normalize_clinical_record_links(payload.record),
+        patient_id=patient_id,
+        doctor_id=current_user.id,
+        issued_at=updated_at.isoformat(),
+    )
+
     try:
-        encrypted_data, nonce = encrypt_record_json(normalize_clinical_record_links(payload.record))
+        encrypted_data, nonce = encrypt_record_json(record_data)
     except MedicalRecordCryptoError as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to encrypt medical record") from exc
 
     record.encrypted_data = encrypted_data
     record.nonce = nonce
-    record.updated_at = now_beijing()
+    record.updated_at = updated_at
     record.updated_by_doctor_id = current_user.id
     db.commit()
 
@@ -910,6 +919,14 @@ def add_patient_record(
         if "doctor_department" not in procedure or not procedure["doctor_department"]:
             procedure["doctor_department"] = doctor_department
     
+    created_at = now_beijing()
+    record_data = embed_record_watermark(
+        record_data,
+        patient_id=patient_id,
+        doctor_id=current_user.id,
+        issued_at=created_at.isoformat(),
+    )
+
     try:
         encrypted_data, nonce = encrypt_record_json(record_data)
     except Exception as exc:
@@ -922,8 +939,8 @@ def add_patient_record(
         encrypted_data=encrypted_data,
         nonce=nonce,
         updated_by_doctor_id=current_user.id,
-        created_at=now_beijing(),
-        updated_at=now_beijing()
+        created_at=created_at,
+        updated_at=created_at
     )
     db.add(new_record)
     db.flush()

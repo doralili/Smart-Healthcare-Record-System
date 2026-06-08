@@ -5,6 +5,7 @@ import PatientDashboard from "../views/PatientDashboard.vue";
 import DoctorDashboard from "../views/DoctorDashboard.vue";
 import AdminDashboard from "../views/AdminDashboard.vue";
 import AuditorDashboard from "../views/AuditorDashboard.vue";
+import AuditorWatermarks from "../views/AuditorWatermarks.vue";
 import { useAuthStore } from "../stores/auth";
 
 const roleHomeMap: Record<string, string> = {
@@ -44,6 +45,11 @@ const router = createRouter({
     {
       path: "/auditor",
       component: AuditorDashboard,
+      meta: { role: "AUDITOR" },
+    },
+    {
+      path: "/auditor/watermarks",
+      component: AuditorWatermarks,
       meta: { role: "AUDITOR" },
     },
   ],
