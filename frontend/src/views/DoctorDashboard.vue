@@ -51,8 +51,9 @@ const newRecordForm = ref<{
   procedures: []
 })
 
-// 全局科室
+// 全局科室和医生信息
 const globalDepartment = ref('')
+const doctorName = ref('')
 
 const getBeijingDateTimeValue = (date = new Date()) => {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -118,13 +119,6 @@ const getClinicalDateKey = (record: any) =>
     record?.date
   )
 
-
-// 获取诊断相关的用药记录（按日期匹配）
-
-// 获取诊断相关的检查结果（按日期匹配）
-
-// 获取诊断相关的手术记录（按日期匹配）
-
 const joinUnique = (values: any[], fallback = 'Not recorded') => {
   const unique = values
     .map((value) => String(value || '').trim())
@@ -135,7 +129,6 @@ const joinUnique = (values: any[], fallback = 'Not recorded') => {
 
 const collectVisitDepartments = (visit: any) => {
   const values = visit.diagnoses.map((item: any) => item.department)
-
   return joinUnique(values, '')
 }
 
@@ -146,7 +139,6 @@ const diagnosisMatchesKeyword = (diagnosis: any, query: string) => {
     diagnosis.status,
     diagnosis.date,
   ].join(' ').toLowerCase()
-
   return searchable.includes(query)
 }
 
@@ -215,7 +207,6 @@ const resolveVisitGroupKey = (
   if (encounterId) {
     return `encounter:${encounterId}`
   }
-
   if (dateKey) {
     const sameDayVisit = Array.from(grouped.values()).find((visit) => visit.dateKey === dateKey)
     if (sameDayVisit) {
@@ -223,7 +214,6 @@ const resolveVisitGroupKey = (
     }
     return `date:${dateKey}`
   }
-
   return fallback
 }
 
@@ -273,6 +263,7 @@ const visitRows = computed(() => {
       existing.visitType = joinUnique(existing.encounters.map((item: any) => item.type), VISIT_TYPE_FALLBACK)
       existing.class = joinUnique(existing.encounters.map((item: any) => item.class), VISIT_CLASS_FALLBACK)
       existing.status = joinUnique(existing.encounters.map((item: any) => item.status))
+      existing.doctorName = joinUnique(existing.encounters.map((item: any) => item.doctor_name), 'Unknown')
       continue
     }
 
@@ -284,6 +275,7 @@ const visitRows = computed(() => {
       visitType: joinUnique(encounters.map((item: any) => item.type), VISIT_TYPE_FALLBACK),
       class: joinUnique(encounters.map((item: any) => item.class), VISIT_CLASS_FALLBACK),
       status: joinUnique(encounters.map((item: any) => item.status)),
+      doctorName: joinUnique(encounters.map((item: any) => item.doctor_name), 'Unknown'),
       diagnoses: [diagnosis],
       encounters,
       medications,
@@ -390,6 +382,10 @@ const viewVisitDetail = (visit: any) => {
 const loadDoctorProfile = async () => {
   try {
     doctorProfile.value = await getDoctorProfile()
+    if (doctorProfile.value) {
+      doctorName.value = doctorProfile.value.name || doctorProfile.value.username
+      globalDepartment.value = doctorProfile.value.department || ''
+    }
   } catch (err) {
     console.error('Failed to load doctor profile:', err)
   }
@@ -401,7 +397,9 @@ const addEncounter = () => {
     type: '',
     class: '',
     status: 'finished',
-    start: getBeijingDateTimeValue()
+    start: getBeijingDateTimeValue(),
+    doctor_name: doctorName.value,
+    doctor_department: globalDepartment.value
   })
 }
 
@@ -413,7 +411,9 @@ const addCondition = () => {
   newRecordForm.value.conditions.push({
     code: '',
     clinical_status: 'active',
-    recorded_date: getBeijingDateTimeValue()
+    recorded_date: getBeijingDateTimeValue(),
+    doctor_name: doctorName.value,
+    doctor_department: globalDepartment.value
   })
 }
 
@@ -426,7 +426,9 @@ const addObservation = () => {
     code: '',
     value: '',
     status: 'final',
-    effective_datetime: getBeijingDateTimeValue()
+    effective_datetime: getBeijingDateTimeValue(),
+    doctor_name: doctorName.value,
+    doctor_department: globalDepartment.value
   })
 }
 
@@ -439,7 +441,9 @@ const addMedication = () => {
     medication: '',
     status: 'active',
     authored_on: getBeijingDateTimeValue(),
-    stop_date: ''
+    stop_date: '',
+    doctor_name: doctorName.value,
+    doctor_department: globalDepartment.value
   })
 }
 
@@ -451,7 +455,9 @@ const addProcedure = () => {
   newRecordForm.value.procedures.push({
     code: '',
     status: 'completed',
-    performed_datetime: getBeijingDateTimeValue()
+    performed_datetime: getBeijingDateTimeValue(),
+    doctor_name: doctorName.value,
+    doctor_department: globalDepartment.value
   })
 }
 
@@ -467,12 +473,19 @@ const resetNewRecordForm = () => {
     medications: [],
     procedures: []
   }
-  globalDepartment.value = ''
+  // 重置科室和医生名为当前医生信息
+  globalDepartment.value = doctorProfile.value?.department || ''
+  doctorName.value = doctorProfile.value?.name || doctorProfile.value?.username || ''
 }
 
 // 打开新增病历弹窗
 const openAddRecord = () => {
   resetNewRecordForm()
+  // 自动填充医生的科室和姓名
+  if (doctorProfile.value) {
+    globalDepartment.value = doctorProfile.value.department || ''
+    doctorName.value = doctorProfile.value.name || doctorProfile.value.username || ''
+  }
   addEncounter()
   editDialogVisible.value = true
 }
@@ -489,17 +502,20 @@ const saveNewRecord = async () => {
     return
   }
 
-  // 为所有记录设置 department
+  // 为所有记录设置 department 和 doctor_name
   const recordTime = Date.now()
   for (const [index, encounter] of newRecordForm.value.encounters.entries()) {
     encounter.id = encounter.id || `doctor-encounter-${recordTime}-${index + 1}`
     delete encounter.department
+    encounter.doctor_name = doctorName.value
+    encounter.doctor_department = globalDepartment.value
   }
 
   const primaryEncounterId = newRecordForm.value.encounters[0]?.id || ''
   const applyConditionMetadata = (items: any[]) => {
     for (const item of items) {
       item.department = globalDepartment.value
+      item.doctor_name = doctorName.value
       if (primaryEncounterId && !item.encounter_id) {
         item.encounter_id = primaryEncounterId
       }
@@ -509,6 +525,7 @@ const saveNewRecord = async () => {
   const applyVisitLink = (items: any[]) => {
     for (const item of items) {
       delete item.department
+      item.doctor_name = doctorName.value
       if (primaryEncounterId && !item.encounter_id) {
         item.encounter_id = primaryEncounterId
       }
@@ -999,6 +1016,7 @@ onMounted(() => {
 
         <h3 class="font-bold mb-2">Visits</h3>
         <el-table :data="visitRows" border>
+          <el-table-column prop="doctorName" label="Doctor" width="150" />
           <el-table-column prop="department" label="Department" width="150" />
           <el-table-column prop="visitType" label="Visit Type" min-width="220" />
           <el-table-column prop="class" label="Class" width="120" />
@@ -1043,6 +1061,7 @@ onMounted(() => {
     <el-dialog v-model="visitDetailVisible" :title="selectedVisit?.visitType || 'Visit Detail'" width="70%">
       <div v-if="selectedVisit">
         <el-descriptions title="Visit Information" border :column="2" class="mb-4">
+          <el-descriptions-item label="Doctor">{{ selectedVisit.doctorName || 'Unknown' }}</el-descriptions-item>
           <el-descriptions-item label="Visit Type">{{ selectedVisit.visitType }}</el-descriptions-item>
           <el-descriptions-item label="Department">{{ selectedVisit.department }}</el-descriptions-item>
           <el-descriptions-item label="Class">{{ selectedVisit.class }}</el-descriptions-item>
@@ -1130,14 +1149,28 @@ onMounted(() => {
         class="mb-4"
       />
 
-      <!-- 全局 Department 输入框 -->
+      <!-- 全局科室和医生信息 - 自动读取，只读不可修改 -->
       <div class="form-section global-department">
-        <h3 class="section-title">Record Department</h3>
-        <el-input 
-          v-model="globalDepartment" 
-          placeholder="e.g., Cardiology, Internal Medicine, Surgery" 
-          style="width: 300px"
-        />
+        <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+          <div style="flex: 1;">
+            <h3 class="section-title">Record Department</h3>
+            <el-input 
+              v-model="globalDepartment" 
+              :placeholder="doctorProfile?.department ? 'Auto-filled from your profile' : 'No department assigned'"
+              disabled
+              style="width: 100%"
+            />
+          </div>
+          <div style="flex: 1;">
+            <h3 class="section-title">Doctor Name</h3>
+            <el-input 
+              :value="doctorName"
+              placeholder="Auto-filled from your profile"
+              disabled
+              style="width: 100%"
+            />
+          </div>
+        </div>
       </div>
 
       <div style="max-height: 70vh; overflow-y: auto; padding-right: 8px;">
@@ -1152,7 +1185,11 @@ onMounted(() => {
             </el-table-column>
             <el-table-column label="Class" width="150">
               <template #default="{ $index }">
-                <el-input v-model="newRecordForm.encounters[$index].class" placeholder="e.g., AMB" />
+                <el-select v-model="newRecordForm.encounters[$index].class" placeholder="Select class" style="width: 100%">
+                  <el-option label="AMB" value="AMB" />
+                  <el-option label="EMER" value="EMER" />
+                  <el-option label="IMP" value="IMP" />
+                </el-select>
               </template>
             </el-table-column>
             <el-table-column label="Status" width="120">
