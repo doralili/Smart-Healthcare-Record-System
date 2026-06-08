@@ -132,7 +132,8 @@ flowchart LR
 
 - 建立 FastAPI 后端项目结构。
 - 实现登录接口、患者注册接口、当前用户识别、角色依赖 `require_roles()`。
-- 患者可以自助注册；医生、管理员、审计员账号不开放自助注册，应由管理员或种子数据统一发放。
+- 患者可以自助注册；注册时必须填写 `gender`、`birth_date`、`phone`、`address`，后端会同时创建绑定到该账号的 `patients` 基础信息档案。
+- 医生、管理员、审计员账号不开放自助注册，应由管理员或种子数据统一发放。
 - 密码使用 `bcrypt` 哈希，登录成功后签发 JWT。
 - 后端从 `backend/.env` 读取数据库、JWT、病历加密密钥等配置；数据库连接、JWT 密钥和病历加密密钥不再在源码中提供默认值。
 - `.env` 读取使用 `utf-8-sig`，兼容 Windows 下带 BOM 的配置文件。
@@ -154,8 +155,10 @@ flowchart LR
   - `GET /api/doctor/my-patients`（我的病人列表，按状态分组）
   - `POST /api/doctor/access-requests`（提交授权申请）
   - `GET /api/doctor/patients/{patient_id}/records`（查看脱敏病历）
+  - `PUT /api/doctor/patients/{patient_id}/records/{record_id}`（Full Access 下覆盖修改已有病历）
+  - `POST /api/doctor/patients/{patient_id}/records`（有有效授权时新增医生病历）
   - `GET /api/doctor/search-patients`（搜索患者，带状态标识）
-- 当前版本中，医生申请 `EXTRA` 权限不会覆盖已有 `DEFAULT ACTIVE` 授权；医生患者列表不返回电话和地址，默认授权范围下电话和地址均会脱敏。
+- 当前版本中，医生申请 `EXTRA` 权限不会覆盖已有 `DEFAULT ACTIVE` 授权；医生患者列表不返回电话和地址，默认授权范围下电话和地址均会脱敏；医生端支持新增和修改病历，但暂不支持删除整份病例。
 - 增加审计员接口：
   - `GET /api/auditor/summary`（审计日志统计）
   - `GET /api/auditor/audit-logs`（查看最近审计日志）
@@ -189,7 +192,7 @@ flowchart LR
 ### 前端
 
 - 实现登录页、JWT 保存、角色路由跳转和退出登录。
-- 登录页新增 `Login / Patient Sign Up` 切换；注册入口只创建 `PATIENT` 用户。
+- 登录页新增 `Login / Patient Sign Up` 切换；注册入口只创建 `PATIENT` 用户，并要求填写性别、生日、电话和地址。
 - 登录页和管理员重置密码弹窗不再预填默认密码。
 - 登录页支持回车提交，避免重复提交。
 - Dashboard 顶部显示用户名和角色标签。
@@ -199,7 +202,7 @@ flowchart LR
 - 新增医生端 API 封装 `frontend/src/api/doctor.ts`。
 - 患者端 Dashboard 已从占位页升级为可用病历页面：
   - 加载患者本人加密病历并展示解密后的内容
-  - 展示患者基本信息
+  - 展示患者基本信息，包括姓名、性别、生日、电话和地址
   - 展示 visits、diagnoses、lab/vital results、medications、procedures 统计
   - 诊断列表支持按日期搜索
   - 诊断详情抽屉展示相关就诊、用药、检查和操作
@@ -213,6 +216,8 @@ flowchart LR
   - 我的病人列表按 5 个状态分组（Full Access、Default Access、Pending Approval、Rejected、Revoked）
   - 查看患者的脱敏病历
   - 申请 Full Access 权限
+  - 支持医生新增病历，并在 Full Access 下覆盖修改已有病历
+  - 当前版本不提供整份病例删除入口；表单中的 Remove 仅用于移除正在编辑的新病历子项
   - **新增搜索患者页面**：
     - 按姓名搜索患者
     - 根据授权状态显示不同的操作按钮
@@ -237,7 +242,7 @@ flowchart LR
 | 模块 | 状态 | 说明 |
 |---|---|---|
 | 项目初始化 | 已完成 | FastAPI 后端、Vue 3 前端、基础目录结构和开发启动脚本已建立 |
-| 登录、患者注册与角色权限 | 已完成 | bcrypt 密码哈希、JWT 登录、患者自助注册、当前用户识别和基础 RBAC 已实现；医生等高权限账号统一发放 |
+| 登录、患者注册与角色权限 | 已完成 | bcrypt 密码哈希、JWT 登录、患者自助注册、当前用户识别和基础 RBAC 已实现；患者注册必须填写性别、生日、电话和地址，并自动创建患者基础档案；医生等高权限账号统一发放 |
 | openGauss 数据库连接 | 已完成 | 使用 PostgreSQL 兼容方式连接 openGauss |
 | 数据库一键准备脚本 | 已完成初版 | 可创建新容器，并复制现有数据库或初始化干净数据库 |
 | Synthea 数据导入 | 已完成初版 | 可导入 FHIR JSON，生成患者信息和结构化病历 |
@@ -245,6 +250,7 @@ flowchart LR
 | 患者本人查看病历 | 已完成初版 | 患者演示账号登录后可查看绑定到自己的病历 |
 | 医生“我的病人列表” | 已完成 | 按 Full Access、Default Access、Pending Approval、Rejected、Revoked 五组显示 |
 | 医生搜索患者| 已完成 | 支持按姓名模糊查询搜索，根据授权状态显示不同操作按钮 |
+| 医生新增/修改病历 | 已完成初版 | 有有效授权时可新增医生病历；Full Access 下可覆盖修改已有病历；当前版本不支持删除整份病例 |
 | 默认授权与撤销 | 已完成 | 患者可查看已授权医生并撤销；默认授权有效期为 14 天 |
 | 额外授权申请 |  已完成  | 医生提交 → 患者审批 → 授权生效的完整流程；批准后有效期为 14 天 |
 | 字段脱敏策略 | 已完成  | 查看待审批申请、批准/拒绝、查看已授权医生、撤销授权 |
@@ -706,7 +712,7 @@ http://localhost:5173
 
 `patient1` 到 `patient10` 都是患者演示账号，密码相同。登录后进入 `/patient`，可以查看患者基础信息、诊断列表、相关就诊记录、检查和生命体征、用药、操作记录，以及未关联到诊断的临床记录分组。
 
-登录页也提供 `Patient Sign Up`，用于创建新的患者账号。注册接口不会接受角色参数，新账号固定为：
+登录页也提供 `Patient Sign Up`，用于创建新的患者账号。注册时必须填写性别、生日、电话和地址；注册成功后，系统会创建 `PATIENT` 用户，并同步创建绑定到该用户的患者基础信息档案。注册接口不会接受角色参数，新账号固定为：
 
 ```text
 role=PATIENT
@@ -758,8 +764,10 @@ password123
 5. 申请提交后，患者端会显示待审批申请，医生端患者移至 Pending Approval 分组。
 6. 患者批准申请后，医生端患者移至对应分组（Default Access/Full Access）。
 7. 点击 “查看病历”，查看按授权范围脱敏后的患者病历内容。
-8. 患者撤销授权后，医生端患者移至 Revoked 分组，再次查看病历会被拒绝。
-9. 被拒绝的申请可重新提交，已有 Full Access 的患者不显示申请按钮，已有 Default Access 的患者只显示 Apply Full Access 按钮。
+8. 对已有有效授权的患者，医生可以新增一份医生病历；拥有 Full Access 时可以覆盖修改已有病历。
+9. 当前版本医生端不支持删除整份病例；新增/编辑表单里的 Remove 只表示移除表单中的某一条就诊、诊断、检查、用药或操作子项。
+10. 患者撤销授权后，医生端患者移至 Revoked 分组，再次查看病历会被拒绝。
+11. 被拒绝的申请可重新提交，已有 Full Access 的患者不显示申请按钮，已有 Default Access 的患者只显示 Apply Full Access 按钮。
 
 ### 患者端
 1. 使用 patient1-10 登录，进入患者 Dashboard，查看本人病历、统计数据、诊断列表。
