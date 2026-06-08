@@ -33,6 +33,7 @@ const applyForm = ref({
 // 诊断详情弹窗
 const visitDetailVisible = ref(false)
 const selectedVisit = ref<any>(null)
+const diagnosisDateQuery = ref('')
 const visitDetailKeywordQuery = ref('')
 const visitDetailDepartmentFilter = ref('')
 
@@ -101,10 +102,10 @@ const getDateKey = (value: any) => {
   return text.slice(0, 10)
 }
 
-const getEncounterId = (record: any) => {
+const getEncounterId = (record: any, allowOwnId = false) => {
   if (!record) return ''
   if (record.encounter_id) return String(record.encounter_id)
-  if (record.id) return String(record.id)
+  if (allowOwnId && record.id) return String(record.id)
   const reference = record.encounter?.reference
   return reference ? String(reference).split('/').pop() || '' : ''
 }
@@ -122,10 +123,54 @@ const getClinicalDateKey = (record: any) =>
 const joinUnique = (values: any[], fallback = 'Not recorded') => {
   const unique = values
     .map((value) => String(value || '').trim())
-    .filter(Boolean)
+    .filter((value) => hasRecordedText(value))
     .filter((value, index, array) => array.indexOf(value) === index)
   return unique.length ? unique.join('; ') : fallback
 }
+
+const getDoctorDisplayName = (record: any) =>
+  hasRecordedText(record?.doctor_name) ? record.doctor_name : record?.doctor
+
+const cleanMedicalText = (value: any) => {
+  if (!hasRecordedText(value)) return ''
+  return String(value)
+    .replace(/\s*\((finding|disorder|procedure|observable entity|regime\/therapy)\)\s*$/i, '')
+    .trim()
+}
+
+const normalizeVisitClass = (value: any) => {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  const key = text.toLowerCase().replace(/[-_\s]/g, '')
+  const classMap: Record<string, string> = {
+    amb: 'AMB',
+    ambulatory: 'AMB',
+    outpatient: 'AMB',
+    emer: 'EMER',
+    emergency: 'EMER',
+    er: 'EMER',
+    imp: 'IMP',
+    inpatient: 'IMP',
+    inpatientencounter: 'IMP',
+    hh: 'HH',
+    home: 'HH',
+    vr: 'VR',
+    virtual: 'VR',
+  }
+  return classMap[key] || (text.length <= 6 ? text.toUpperCase() : text)
+}
+
+const normalizeSearchText = (value: any) =>
+  String(value ?? '')
+    .toLowerCase()
+    .replace(/[./]/g, '-')
+    .replace(/\s+/g, '')
+
+const formatPrimaryDepartment = (value: any) =>
+  String(value || '')
+    .split(';')
+    .map((item) => item.trim())
+    .filter(Boolean)[0] || ''
 
 const collectVisitDepartments = (visit: any) => {
   const values = visit.diagnoses.map((item: any) => item.department)
@@ -133,12 +178,13 @@ const collectVisitDepartments = (visit: any) => {
 }
 
 const diagnosisMatchesKeyword = (diagnosis: any, query: string) => {
-  const searchable = [
+  const searchable = normalizeSearchText([
     diagnosis.department,
     diagnosis.name,
     diagnosis.status,
     diagnosis.date,
-  ].join(' ').toLowerCase()
+    diagnosis.recorded_date,
+  ].join(' '))
   return searchable.includes(query)
 }
 
@@ -152,10 +198,10 @@ const selectedVisitDepartmentOptions = computed(() => {
 
 const filteredSelectedDiagnoses = computed(() => {
   if (!selectedVisit.value) return []
-  const query = visitDetailKeywordQuery.value.trim().toLowerCase()
-  const department = visitDetailDepartmentFilter.value.trim().toLowerCase()
+  const query = normalizeSearchText(visitDetailKeywordQuery.value)
+  const department = normalizeSearchText(visitDetailDepartmentFilter.value)
   return selectedVisit.value.diagnoses.filter((diagnosis: any) =>
-    (!department || String(diagnosis.department || '').trim().toLowerCase() === department) &&
+    (!department || normalizeSearchText(diagnosis.department) === department) &&
     (!query || diagnosisMatchesKeyword(diagnosis, query))
   )
 })
@@ -235,8 +281,29 @@ const dedupeRecords = (rows: any[]) => {
   })
 }
 
+const diagnosisSourceRows = computed(() => {
+  const rawConditions = currentRecord.value?.raw_record?.conditions
+  if (currentPatient.value?.scope === 'EXTRA' && Array.isArray(rawConditions)) {
+    return rawConditions.map((condition: any, index: number) => ({
+      ...condition,
+      name: condition.code || '',
+      department: formatPrimaryDepartment(condition.department) || 'Not Classified',
+      status: condition.clinical_status || 'active',
+      date: condition.recorded_date || '',
+      recorded_date: condition.recorded_date || '',
+      _fallbackKey: `diagnosis:${index}`,
+    }))
+  }
+
+  return (currentRecord.value?.diagnosis_list || []).map((diagnosis: any, index: number) => ({
+    ...diagnosis,
+    department: formatPrimaryDepartment(diagnosis.department) || 'Not Classified',
+    _fallbackKey: `diagnosis:${index}`,
+  }))
+})
+
 const visitRows = computed(() => {
-  const diagnoses = currentRecord.value?.diagnosis_list || []
+  const diagnoses = diagnosisSourceRows.value
   const grouped = new Map<string, any>()
 
   for (const diagnosis of diagnoses) {
@@ -249,8 +316,15 @@ const visitRows = computed(() => {
     const firstEncounter = encounters[0]
     const diagnosisEncounterId = getEncounterId(diagnosis)
     const diagnosisDateKey = getClinicalDateKey(diagnosis)
-    const key = resolveVisitGroupKey(grouped, diagnosisEncounterId, diagnosisDateKey, `diagnosis:${diagnosis.name || ''}`)
-    const date = firstEncounter?.start || diagnosis.date
+    const firstEncounterId = getEncounterId(firstEncounter, true)
+    const firstEncounterDateKey = getDateKey(firstEncounter?.start)
+    const key = resolveVisitGroupKey(
+      grouped,
+      firstEncounterId || diagnosisEncounterId,
+      firstEncounterDateKey || diagnosisDateKey,
+      diagnosis._fallbackKey || `diagnosis:${diagnosis.name || ''}`,
+    )
+    const date = firstEncounter?.start || diagnosis.date || diagnosis.recorded_date
     const existing = grouped.get(key)
 
     if (existing) {
@@ -260,22 +334,29 @@ const visitRows = computed(() => {
       existing.observations = dedupeRecords([...existing.observations, ...observations])
       existing.procedures = dedupeRecords([...existing.procedures, ...procedures])
       existing.department = collectVisitDepartments(existing)
-      existing.visitType = joinUnique(existing.encounters.map((item: any) => item.type), VISIT_TYPE_FALLBACK)
-      existing.class = joinUnique(existing.encounters.map((item: any) => item.class), VISIT_CLASS_FALLBACK)
+      existing.visitType = joinUnique(existing.encounters.map((item: any) => cleanMedicalText(item.type)), VISIT_TYPE_FALLBACK)
+      existing.class = joinUnique(existing.encounters.map((item: any) => normalizeVisitClass(item.class)), VISIT_CLASS_FALLBACK)
       existing.status = joinUnique(existing.encounters.map((item: any) => item.status))
-      existing.doctorName = joinUnique(existing.encounters.map((item: any) => item.doctor_name), 'Unknown')
+      existing.doctorName = joinUnique([
+        ...existing.encounters.map((item: any) => getDoctorDisplayName(item)),
+        ...existing.diagnoses.map((item: any) => getDoctorDisplayName(item)),
+      ], 'Unknown')
+      existing.dateKey = existing.dateKey || firstEncounterDateKey || diagnosisDateKey
       continue
     }
 
     grouped.set(key, {
       key,
-      dateKey: diagnosisDateKey,
+      dateKey: firstEncounterDateKey || diagnosisDateKey,
       date,
       department: diagnosis.department || '',
-      visitType: joinUnique(encounters.map((item: any) => item.type), VISIT_TYPE_FALLBACK),
-      class: joinUnique(encounters.map((item: any) => item.class), VISIT_CLASS_FALLBACK),
+      visitType: joinUnique(encounters.map((item: any) => cleanMedicalText(item.type)), VISIT_TYPE_FALLBACK),
+      class: joinUnique(encounters.map((item: any) => normalizeVisitClass(item.class)), VISIT_CLASS_FALLBACK),
       status: joinUnique(encounters.map((item: any) => item.status)),
-      doctorName: joinUnique(encounters.map((item: any) => item.doctor_name), 'Unknown'),
+      doctorName: joinUnique([
+        ...encounters.map((item: any) => getDoctorDisplayName(item)),
+        getDoctorDisplayName(diagnosis),
+      ], 'Unknown'),
       diagnoses: [diagnosis],
       encounters,
       medications,
@@ -298,6 +379,24 @@ const visitRows = computed(() => {
     if (Number.isNaN(firstTime)) return 1
     if (Number.isNaN(secondTime)) return -1
     return secondTime - firstTime
+  })
+})
+
+const filteredVisitRows = computed(() => {
+  const dateQuery = normalizeSearchText(diagnosisDateQuery.value)
+  if (!dateQuery) return visitRows.value
+
+  return visitRows.value.filter((item) => {
+    const dateSearchable = normalizeSearchText([
+      item.visitType,
+      item.date,
+      item.dateKey,
+      formatDate(item.date),
+      item.diagnoses.map((diagnosis: any) => diagnosis.date).join(' '),
+      item.diagnoses.map((diagnosis: any) => diagnosis.recorded_date).join(' '),
+    ].join(' '))
+
+    return dateSearchable.includes(dateQuery)
   })
 })
 
@@ -366,6 +465,9 @@ const openRecord = async (patient: any) => {
     const res: any = await getPatientRecord(patient.id)
     currentPatient.value = patient
     currentRecord.value = res.medical_record
+    diagnosisDateQuery.value = ''
+    selectedVisit.value = null
+    visitDetailVisible.value = false
     recordDialogVisible.value = true
   } catch (err) {
     ElMessage.error('Failed to load medical record')
@@ -1009,13 +1111,30 @@ onMounted(() => {
         <el-descriptions title="Summary" border :column="2" class="mb-4">
           <el-descriptions-item label="Visits">{{ visitRows.length }}</el-descriptions-item>
           <el-descriptions-item label="Diagnoses">{{ currentRecord.diagnoses }}</el-descriptions-item>
-          <el-descriptions-item v-if="currentPatient?.scope === 'EXTRA'" label="Lab / Vital Count">{{ currentRecord.lab_results?.length || 0 }}</el-descriptions-item>
-          <el-descriptions-item v-if="currentPatient?.scope === 'EXTRA'" label="Medications Count">{{ currentRecord.medications?.length || 0 }}</el-descriptions-item>
-          <el-descriptions-item v-if="currentPatient?.scope === 'EXTRA'" label="Procedures Count">{{ currentRecord.procedures?.length || 0 }}</el-descriptions-item>
+          <el-descriptions-item label="Lab / Vital Count">{{ currentRecord.lab_results?.length || 0 }}</el-descriptions-item>
+          <el-descriptions-item label="Medications Count">{{ currentRecord.medications?.length || 0 }}</el-descriptions-item>
+          <el-descriptions-item label="Procedures Count">{{ currentRecord.procedures?.length || 0 }}</el-descriptions-item>
         </el-descriptions>
 
-        <h3 class="font-bold mb-2">Visits</h3>
-        <el-table :data="visitRows" border>
+        <el-alert
+          v-if="currentPatient?.scope === 'DEFAULT'"
+          title="Default access only shows medical records from the last year."
+          type="info"
+          show-icon
+          :closable="false"
+          class="mb-4"
+        />
+
+        <div class="record-section-header mb-2">
+          <h3 class="font-bold">Visits</h3>
+          <el-input
+            v-model="diagnosisDateQuery"
+            clearable
+            class="record-filter"
+            placeholder="Search by time, e.g. 2024, 2024-05-20, 2024-05-20 14:30"
+          />
+        </div>
+        <el-table :data="filteredVisitRows" border>
           <el-table-column prop="doctorName" label="Doctor" width="150" />
           <el-table-column prop="department" label="Department" width="150" />
           <el-table-column prop="visitType" label="Visit Type" min-width="220" />
@@ -1030,17 +1149,17 @@ onMounted(() => {
               {{ row.diagnoses.length }}
             </template>
           </el-table-column>
-          <el-table-column v-if="currentPatient?.scope === 'EXTRA'" label="Lab / Vital" width="100">
+          <el-table-column label="Lab / Vital" width="100">
             <template #default="{ row }">
               {{ row.observations.length }}
             </template>
           </el-table-column>
-          <el-table-column v-if="currentPatient?.scope === 'EXTRA'" label="Medications" width="110">
+          <el-table-column label="Medications" width="110">
             <template #default="{ row }">
               {{ row.medications.length }}
             </template>
           </el-table-column>
-          <el-table-column v-if="currentPatient?.scope === 'EXTRA'" label="Procedures" width="100">
+          <el-table-column label="Procedures" width="100">
             <template #default="{ row }">
               {{ row.procedures.length }}
             </template>
@@ -1482,6 +1601,21 @@ onMounted(() => {
   gap: 4px;
   color: #606266;
   font-size: 13px;
+}
+
+.record-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.record-section-header h3 {
+  margin: 0;
+}
+
+.record-filter {
+  width: min(420px, 100%);
 }
 
 .visit-detail-filters {

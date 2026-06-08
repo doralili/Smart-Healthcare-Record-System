@@ -54,6 +54,154 @@ def mask_address(address: str | None) -> str:
     return str(address).split(",")[0].strip()
 
 
+def is_placeholder_doctor_name(value: str | None) -> bool:
+    normalized = str(value or "").strip().casefold().replace(" ", "")
+    return normalized in {"", "norecord", "notrecorded", "unknown", "none", "null"}
+
+
+def normalize_department(value: str | None) -> str:
+    return str(value or "").strip().casefold()
+
+
+def get_doctor_display_name(user: User, doctor: Doctor | None) -> str:
+    if doctor is not None and doctor.name:
+        display_name = doctor.name
+    else:
+        display_name = user.username
+    return "" if is_placeholder_doctor_name(display_name) else display_name
+
+
+def get_doctor_display_name_by_user_id(db: Session, user_id: int) -> str:
+    result = (
+        db.query(User, Doctor)
+        .outerjoin(Doctor, Doctor.user_id == User.id)
+        .filter(User.id == user_id)
+        .first()
+    )
+    if result is None:
+        return ""
+
+    user, doctor = result
+    return get_doctor_display_name(user, doctor)
+
+
+def get_department_doctor_map(db: Session) -> dict[str, str]:
+    rows = (
+        db.query(User, Doctor)
+        .join(Doctor, Doctor.user_id == User.id)
+        .filter(User.role == "DOCTOR")
+        .filter(User.status == "ACTIVE")
+        .filter(Doctor.verified.is_(True))
+        .order_by(Doctor.department.asc(), Doctor.name.asc())
+        .all()
+    )
+
+    result: dict[str, str] = {}
+    for user, doctor in rows:
+        department_key = normalize_department(doctor.department)
+        display_name = get_doctor_display_name(user, doctor)
+        if department_key and display_name and department_key not in result:
+            result[department_key] = display_name
+    return result
+
+
+def get_doctor_name_by_department(
+    department_doctor_map: dict[str, str],
+    department: str | None,
+) -> str:
+    departments = [
+        normalize_department(item)
+        for item in str(department or "").split(";")
+        if normalize_department(item)
+    ]
+
+    for department_key in departments:
+        doctor_name = department_doctor_map.get(department_key)
+        if doctor_name:
+            return doctor_name
+
+    if not departments:
+        return department_doctor_map.get(normalize_department("General Medicine"), "")
+
+    return ""
+
+
+def apply_doctor_name(
+    item: dict,
+    *,
+    record_doctor_name: str | None,
+    department_doctor_map: dict[str, str] | None = None,
+    allow_department_fallback: bool = True,
+) -> dict:
+    item_copy = item.copy()
+    doctor_name = record_doctor_name or item_copy.get("doctor_name") or item_copy.get("doctor")
+    if (
+        allow_department_fallback
+        and is_placeholder_doctor_name(str(doctor_name or ""))
+        and department_doctor_map is not None
+    ):
+        doctor_name = get_doctor_name_by_department(
+            department_doctor_map,
+            str(item.get("department") or ""),
+        )
+
+    if doctor_name and not is_placeholder_doctor_name(str(doctor_name)):
+        item_copy["doctor_name"] = doctor_name
+        item_copy["doctor"] = doctor_name
+    else:
+        item_copy.pop("doctor_name", None)
+        if is_placeholder_doctor_name(str(item_copy.get("doctor") or "")):
+            item_copy.pop("doctor", None)
+    return item_copy
+
+
+def enrich_clinical_data_doctor_names(
+    clinical_data: dict[str, Any],
+    *,
+    record_doctor_name: str | None,
+    department_doctor_map: dict[str, str],
+) -> dict[str, Any]:
+    enriched = dict(clinical_data)
+
+    for key in ["conditions", "medications", "observations", "procedures", "encounters"]:
+        allow_department_fallback = key == "conditions"
+        enriched_items = []
+        for item in enriched.get(key, []):
+            if isinstance(item, dict):
+                enriched_items.append(
+                    apply_doctor_name(
+                        item,
+                        record_doctor_name=record_doctor_name,
+                        department_doctor_map=department_doctor_map,
+                        allow_department_fallback=allow_department_fallback,
+                    )
+                )
+        enriched[key] = enriched_items
+
+    for condition in enriched.get("conditions", []):
+        if not isinstance(condition, dict):
+            continue
+        condition_doctor_name = condition.get("doctor_name") or condition.get("doctor")
+        for related_key in [
+            "related_encounters",
+            "related_medications",
+            "related_observations",
+            "related_procedures",
+        ]:
+            condition[related_key] = [
+                apply_doctor_name(
+                    item,
+                    record_doctor_name=str(condition_doctor_name or record_doctor_name or ""),
+                    department_doctor_map=department_doctor_map,
+                    allow_department_fallback=False,
+                )
+                for item in condition.get(related_key, [])
+                if isinstance(item, dict)
+            ]
+
+    return enriched
+
+
 def consent_priority(consent: Consent) -> tuple[int, int]:
     status_rank = {
         "ACTIVE": 4,
@@ -304,13 +452,30 @@ def get_patient_mask_record(
     latest_updated_at = None
     latest_updated_by = None
     latest_record_id = None
+    fallback_record_id = medical_records[0].id if medical_records else None
+    doctor_cache: dict[int, str] = {}
+    department_doctor_map = get_department_doctor_map(db)
     
     for record in medical_records:
         try:
+            record_doctor_name = None
+            if record.updated_by_doctor_id:
+                if record.updated_by_doctor_id not in doctor_cache:
+                    doctor_cache[record.updated_by_doctor_id] = get_doctor_display_name_by_user_id(
+                        db,
+                        record.updated_by_doctor_id,
+                    )
+                record_doctor_name = doctor_cache[record.updated_by_doctor_id]
+
             clinical_data = filter_related_clinical_records(
                 normalize_clinical_record_links(
                     decrypt_record_json(record.encrypted_data, record.nonce)
                 )
+            )
+            clinical_data = enrich_clinical_data_doctor_names(
+                clinical_data,
+                record_doctor_name=record_doctor_name,
+                department_doctor_map=department_doctor_map,
             )
             all_conditions.extend(clinical_data.get("conditions", []))
             all_medications.extend(clinical_data.get("medications", []))
@@ -326,6 +491,9 @@ def get_patient_mask_record(
         except Exception as e:
             print(f"Decryption failed for record {record.id}: {e}")
             continue
+
+    if latest_record_id is None:
+        latest_record_id = fallback_record_id
     
     # 构建 encounters 字典，方便按 encounter_id 查找就诊信息
     encounters_map = {}
@@ -390,22 +558,31 @@ def get_patient_mask_record(
     def build_diagnosis_list(conds, encounters_map):
         """构建诊断列表，可选地关联就诊信息"""
         result = []
+
+        def encounter_payload(enc, cond):
+            return {
+                "id": enc.get("id"),
+                "type": enc.get("type", ""),
+                "class": enc.get("class", ""),
+                "status": enc.get("status", ""),
+                "start": enc.get("start", ""),
+                "doctor_name": enc.get("doctor_name") or cond.get("doctor_name", ""),
+                "doctor": enc.get("doctor") or cond.get("doctor", ""),
+                "doctor_department": enc.get("doctor_department", "")
+            }
+
         for cond in conds:
             encounter_id = cond.get("encounter_id")
-            related_encounters = []
+            related_encounters = [
+                encounter_payload(enc, cond)
+                for enc in cond.get("related_encounters", [])
+                if isinstance(enc, dict)
+            ]
             
             # 如果有 encounter_id，从 encounters_map 中获取对应的就诊信息
-            if encounter_id and encounter_id in encounters_map:
+            if not related_encounters and encounter_id and encounter_id in encounters_map:
                 enc = encounters_map[encounter_id]
-                related_encounters = [{
-                    "id": enc.get("id"),
-                    "type": enc.get("type", ""),
-                    "class": enc.get("class", ""),
-                    "status": enc.get("status", ""),
-                    "start": enc.get("start", ""),
-                    "doctor_name": enc.get("doctor_name", ""),
-                    "doctor_department": enc.get("doctor_department", "")
-                }]
+                related_encounters = [encounter_payload(enc, cond)]
             
             result.append({
                 "name": cond.get("code", ""),
@@ -413,9 +590,28 @@ def get_patient_mask_record(
                 "status": cond.get("clinical_status", "active"),
                 "date": cond.get("recorded_date", "")[:10] if cond.get("recorded_date") else "",
                 "encounter_id": encounter_id,
-                "related_encounters": related_encounters
+                "doctor_name": cond.get("doctor_name", ""),
+                "doctor": cond.get("doctor", ""),
+                "related_encounters": related_encounters,
+                "related_observations": cond.get("related_observations", []),
+                "related_medications": cond.get("related_medications", []),
+                "related_procedures": cond.get("related_procedures", [])
             })
         return result
+
+    def collect_related_items(conds, related_key):
+        related_items = []
+        seen = set()
+        for cond in conds:
+            for item in cond.get(related_key, []):
+                if not isinstance(item, dict):
+                    continue
+                item_key = str(item.get("id") or id(item))
+                if item_key in seen:
+                    continue
+                seen.add(item_key)
+                related_items.append(item)
+        return related_items
     
     # 9. 构建用药列表
     def build_medications_list(meds):
@@ -446,6 +642,9 @@ def get_patient_mask_record(
     if scope == "DEFAULT":
         # 默认范围：只显示一年内的记录
         filtered_conditions = filter_records_by_date(all_conditions, 365)
+        filtered_observations = collect_related_items(filtered_conditions, "related_observations")
+        filtered_medications = collect_related_items(filtered_conditions, "related_medications")
+        filtered_procedures = collect_related_items(filtered_conditions, "related_procedures")
         
         result = {
             "record_id": latest_record_id,
@@ -456,14 +655,17 @@ def get_patient_mask_record(
             "birth_date": str(patient.birth_date) if patient.birth_date else "",
             "visits": len(all_encounters),
             "diagnoses": len(filtered_conditions),
-            "lab_results": "Limited - apply full access to view",
-            "medications": "Limited - apply full access to view",
-            "procedures": "Limited - apply full access to view",
+            "lab_results": build_observations_list(filtered_observations),
+            "medications": build_medications_list(filtered_medications),
+            "procedures": build_procedures_list(filtered_procedures),
             "diagnosis_list": build_diagnosis_list(filtered_conditions, encounters_map),
             "updated_at": latest_updated_at,
             "updated_by_doctor_id": latest_updated_by,
             "record_scope": scope,
-            "message": f"Default scope - only records from the last year ({len(filtered_conditions)} diagnoses found)"
+            "message": (
+                "Default scope - records related to diagnoses from the last year "
+                f"({len(filtered_conditions)} diagnoses found)"
+            )
         }
         if len(filtered_conditions) == 0:
             result["message"] = "Default scope - no medical records in the last year"

@@ -152,6 +152,9 @@ def normalize_clinical_record_links(clinical_data: RecordDict) -> RecordDict:
         if isinstance(item, dict)
     ]
 
+    for encounter in encounters:
+        encounter["class"] = normalize_encounter_class(encounter.get("class"))
+
     if encounters:
         primary_encounter = encounters[0]
         primary_encounter.setdefault("id", "doctor-encounter-1")
@@ -173,6 +176,30 @@ def normalize_clinical_record_links(clinical_data: RecordDict) -> RecordDict:
     normalized["encounters"] = encounters
     strip_non_diagnosis_departments(normalized)
     return normalized
+
+
+def normalize_encounter_class(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    key = text.casefold().replace("-", "").replace("_", "").replace(" ", "")
+    class_map = {
+        "amb": "AMB",
+        "ambulatory": "AMB",
+        "outpatient": "AMB",
+        "emergency": "EMER",
+        "emer": "EMER",
+        "er": "EMER",
+        "inpatient": "IMP",
+        "inpatientencounter": "IMP",
+        "imp": "IMP",
+        "home": "HH",
+        "hh": "HH",
+        "virtual": "VR",
+        "vr": "VR",
+    }
+    return class_map.get(key, text.upper() if len(text) <= 6 else text)
 
 
 def strip_non_diagnosis_departments(clinical_data: RecordDict) -> RecordDict:
