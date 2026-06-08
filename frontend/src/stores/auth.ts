@@ -51,8 +51,15 @@ export const useAuthStore = defineStore("auth", {
       return res.data.user;
     },
 
-    async registerPatient(username: string, password: string) {
-      const res = await register({ username, password });
+    async registerPatient(payload: {
+      username: string;
+      password: string;
+      gender: string;
+      birth_date: string;
+      phone: string;
+      address: string;
+    }) {
+      const res = await register(payload);
       return res.data;
     },
 

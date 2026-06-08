@@ -15,6 +15,10 @@ const mode = ref<"login" | "register">("login");
 const form = reactive({
   username: "",
   password: "",
+  gender: "",
+  birth_date: "",
+  phone: "",
+  address: "",
 });
 
 async function submitLogin() {
@@ -46,10 +50,29 @@ async function submitRegister() {
     return;
   }
 
+  if (
+    !form.username.trim() ||
+    !form.password ||
+    !form.gender ||
+    !form.birth_date ||
+    !form.phone.trim() ||
+    !form.address.trim()
+  ) {
+    ElMessage.error("Please complete all registration fields");
+    return;
+  }
+
   loading.value = true;
 
   try {
-    const user = await auth.registerPatient(form.username, form.password);
+    const user = await auth.registerPatient({
+      username: form.username,
+      password: form.password,
+      gender: form.gender,
+      birth_date: form.birth_date,
+      phone: form.phone,
+      address: form.address,
+    });
     ElMessage.success(`Patient account created: ${user.username}`);
     mode.value = "login";
   } catch (error: any) {
@@ -101,6 +124,39 @@ function submitForm() {
             show-password
           />
         </el-form-item>
+
+        <template v-if="mode === 'register'">
+          <el-form-item label="Gender">
+            <el-select v-model="form.gender" placeholder="Select gender">
+              <el-option label="Female" value="female" />
+              <el-option label="Male" value="male" />
+              <el-option label="Other" value="other" />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="Birth Date">
+            <el-date-picker
+              v-model="form.birth_date"
+              type="date"
+              value-format="YYYY-MM-DD"
+              placeholder="Select birth date"
+              class="field-control"
+            />
+          </el-form-item>
+
+          <el-form-item label="Phone">
+            <el-input v-model="form.phone" autocomplete="tel" />
+          </el-form-item>
+
+          <el-form-item label="Address">
+            <el-input
+              v-model="form.address"
+              type="textarea"
+              :rows="3"
+              autocomplete="street-address"
+            />
+          </el-form-item>
+        </template>
 
         <el-button
           native-type="submit"
@@ -158,6 +214,10 @@ p {
 }
 
 .login-button {
+  width: 100%;
+}
+
+.field-control {
   width: 100%;
 }
 

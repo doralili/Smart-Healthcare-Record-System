@@ -59,6 +59,10 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
             user_id=user.id,
             synthea_patient_id=f"SELF-{uuid4().hex}",
             full_name=username,
+            gender=payload.gender,
+            birth_date=payload.birth_date,
+            phone=payload.phone,
+            address=payload.address,
             created_at=now_beijing(),
         )
         db.add(patient)
