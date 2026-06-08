@@ -10,6 +10,7 @@ param(
     [string]$MedicalRecordKey = "",
     [string]$JwtSecret = "",
     [string]$PythonExe = "",
+    [string]$DataOnlyDumpFile = "",
     [switch]$SkipSyntheaImport
 )
 
@@ -193,6 +194,34 @@ function Invoke-Gsql {
     Invoke-GsqlText -Sql $Sql -DbName $DatabaseName
 }
 
+function Restore-DataOnlyDump {
+    param([string]$LocalFile)
+
+    if (-not (Test-Path $LocalFile)) {
+        throw "Missing data-only dump file: $LocalFile"
+    }
+
+    $resolvedFile = (Resolve-Path -LiteralPath $LocalFile).Path
+    $containerFile = "/tmp/" + (Split-Path -Leaf $resolvedFile)
+
+    Write-Step "Clearing existing business table data"
+    Invoke-Gsql @"
+TRUNCATE TABLE
+    access_logs,
+    audit_logs,
+    consents,
+    doctors,
+    medical_records,
+    patients,
+    users
+RESTART IDENTITY CASCADE;
+"@
+
+    Write-Step "Restoring synchronized business data"
+    Invoke-Docker cp $resolvedFile "${TargetContainer}:$containerFile"
+    Invoke-OpenGauss -ContainerName $TargetContainer -Command "gsql -d $DatabaseName -f $containerFile"
+}
+
 if ($DatabaseName -notmatch "^[A-Za-z_][A-Za-z0-9_]*$") {
     throw "DatabaseName must contain only letters, numbers, and underscores, and cannot start with a number."
 }
@@ -247,11 +276,18 @@ else {
     Invoke-GsqlText -DbName "postgres" -Sql "CREATE DATABASE $DatabaseName;"
 }
 
-Write-Step "Applying schema and demo user seed"
+Write-Step "Applying schema"
 # schema.sql uses CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS.
-# seed_users.sql uses INSERT ... WHERE NOT EXISTS.
 Invoke-GsqlFile -LocalFile $SchemaFile -ContainerFile "/tmp/schema.sql"
-Invoke-GsqlFile -LocalFile $SeedUsersFile -ContainerFile "/tmp/seed_users.sql"
+
+if (-not $DataOnlyDumpFile) {
+    Write-Step "Applying demo user seed"
+    # seed_users.sql uses INSERT ... WHERE NOT EXISTS.
+    Invoke-GsqlFile -LocalFile $SeedUsersFile -ContainerFile "/tmp/seed_users.sql"
+}
+else {
+    Write-Output "DataOnlyDumpFile was provided. Demo user seed will be skipped."
+}
 
 Write-Step "Ensuring backend database user '$AppUser'"
 $roleExists = Read-GsqlText -DbName "postgres" -Sql "SELECT 1 FROM pg_roles WHERE rolname='$AppUser';"
@@ -276,7 +312,10 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO $
 $encodedPassword = [System.Uri]::EscapeDataString($AppPassword)
 $databaseUrl = "postgresql+psycopg2://${AppUser}:$encodedPassword@127.0.0.1:$HostPort/$DatabaseName"
 
-if (-not $SkipSyntheaImport) {
+if ($DataOnlyDumpFile) {
+    Restore-DataOnlyDump -LocalFile $DataOnlyDumpFile
+}
+elseif (-not $SkipSyntheaImport) {
     Write-Step "Importing Synthea patients and encrypted medical records"
     Push-Location $BackendDir
     try {
@@ -324,9 +363,14 @@ if (-not $SkipSyntheaImport) {
     }
 }
 
-Write-Step "Inserting doctor1 profile and default demo consent"
-# seed_demo_core.sql updates existing rows and inserts only missing rows.
-Invoke-GsqlFile -LocalFile $SeedCoreFile -ContainerFile "/tmp/seed_demo_core.sql"
+if (-not $DataOnlyDumpFile) {
+    Write-Step "Inserting doctor1 profile and default demo consent"
+    # seed_demo_core.sql updates existing rows and inserts only missing rows.
+    Invoke-GsqlFile -LocalFile $SeedCoreFile -ContainerFile "/tmp/seed_demo_core.sql"
+}
+else {
+    Write-Output "DataOnlyDumpFile was provided. Demo core seed will be skipped."
+}
 
 Write-Step "Current demo data counts"
 Invoke-Gsql "SELECT 'users' AS table_name, count(*) AS row_count FROM users UNION ALL SELECT 'patients', count(*) FROM patients UNION ALL SELECT 'medical_records', count(*) FROM medical_records UNION ALL SELECT 'doctors', count(*) FROM doctors UNION ALL SELECT 'consents', count(*) FROM consents UNION ALL SELECT 'access_logs', count(*) FROM access_logs UNION ALL SELECT 'audit_logs', count(*) FROM audit_logs ORDER BY table_name;"
