@@ -28,4 +28,4 @@ Thumbs.db
 *.log
 
 #database
-database/health_security.copy.sql
+database/health_security_data_sync.sql
