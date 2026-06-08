@@ -509,7 +509,41 @@ DATABASE_URL=postgresql+psycopg2://healthcare:Healthcare%40123@127.0.0.1:15432/h
 database/setup_demo_database.ps1
 ```
 
-这个脚本可以重复执行，不会重复建表，也不会重复插入同一批测试数据。它会完成：
+这个脚本有两种使用方式：
+
+- 团队同步标准数据：传入 `-DataOnlyDumpFile`，导入统一的数据快照。
+- 本地重新生成 Demo：不传 `-DataOnlyDumpFile`，使用仓库里的 Synthea FHIR 数据重新导入。
+
+团队协作时推荐使用统一数据快照，这样每个人的业务表内容和病历内容都与标准库一致。
+
+#### 3.1 运行方式一：团队同步标准数据
+
+如果要让所有同学的数据和标准库一致，使用数据快照模式：
+
+```powershell
+.\database\setup_demo_database.ps1 `
+  -TargetContainer healthcare-opengauss-dev `
+  -HostPort 5432 `
+  -DataOnlyDumpFile .\database\health_security_data_sync.sql
+```
+
+这个模式会完成：
+
+1. 如果目标容器不存在，则新建 openGauss 容器；如果已存在，则直接启动或复用。
+2. 如果 `health_security` 数据库不存在，则创建数据库。
+3. 执行 `database/schema.sql`，确保全部表和索引存在。
+4. 创建或授权后端数据库用户，默认是 `healthcare / Healthcare@123`。
+5. 清空业务表数据：`users`、`patients`、`medical_records`、`doctors`、`consents`、`access_logs`、`audit_logs`。
+6. 导入 `-DataOnlyDumpFile` 指定的数据快照。
+7. 输出各表行数，方便检查同步结果。
+
+这个模式不会修改 openGauss 的数据库登录用户、数据库 owner 或角色密码；它只同步项目业务表里的数据。
+
+病历内容也会同步，因为病历密文和 nonce 保存在 `medical_records.encrypted_data` 和 `medical_records.nonce`。所有人还必须使用同一个 `MEDICAL_RECORD_KEY`，否则数据库里的密文相同也无法解密出相同病历。
+
+#### 3.2 运行方式二：本地重新生成 Demo 数据
+
+如果只是自己本地重新生成 Demo，不要求和标准库完全一致，可以不传 `-DataOnlyDumpFile`。普通模式会完成：
 
 1. 如果目标容器不存在，则新建 openGauss 容器；如果已存在，则直接启动或复用。
 2. 如果 `health_security` 数据库不存在，则创建数据库。
@@ -520,13 +554,20 @@ database/setup_demo_database.ps1
 7. 执行 `database/seed_demo_core.sql`，插入或更新 `doctor1` 的医生资料，并给 `doctor1` 和 `patient1` 建立一条 `DEFAULT` 授权。
 8. 输出各表行数，方便检查初始化结果。
 
-运行代码：（推荐使用独立容器和默认端口）
+运行代码：
 
 ```powershell
 .\database\setup_demo_database.ps1 -TargetContainer healthcare-opengauss-dev -HostPort 5432
 ```
 
-脚本会自动检测容器、数据库、表和演示数据是否已经存在。重复运行同一条命令不会重复建表，也不会重复插入同一批测试数据。
+普通模式会自动检测容器、数据库、表和演示数据是否已经存在。重复运行同一条命令不会重复建表，也不会重复插入同一个患者；但它可能重新加密并更新已有病历。
+
+注意：普通模式导入 Synthea 时，表内容可能和标准库不完全一致，常见差异包括：
+
+- `patients`：如果本地 `synthea/output/fhir/*.json` 不同，患者姓名、Synthea ID、账号绑定可能不同。
+- `medical_records`：即使 FHIR 明文相同，每次加密都会生成新的 `encrypted_data` 和 `nonce`。
+- `consents`：默认授权绑定的是当前 `patient1` 对应的患者，且 `start_time`、`end_time`、`created_at` 会受运行时间影响。
+- `users`：如果库里已有用户，`seed_users.sql` 不会覆盖旧数据，用户 id、状态、创建时间可能和标准库不同。
 
 如果本机确实需要使用其他容器名、端口或数据库用户，可以通过参数覆盖：
 
@@ -600,7 +641,11 @@ synthea/output/csv/
 
 ### 7. 检查数据库演示数据
 
-正常情况下，`setup_demo_database.ps1` 已经导入合成病历，不需要手动执行导入脚本。脚本完成后的基础数据应为：
+正常情况下，`setup_demo_database.ps1` 已经准备好患者和病历数据，不需要手动执行导入脚本。
+
+如果使用 `-DataOnlyDumpFile`，各表行数以标准数据快照为准。
+
+如果使用普通 Synthea Demo 模式，脚本完成后的基础数据应为：
 
 ```text
 users: 13
@@ -610,7 +655,9 @@ patients_without_account: 0
 records_without_patient: 0
 ```
 
-如果你修改或重新生成了 `synthea/output/fhir/*.json`，可以重新运行一键脚本导入。导入逻辑是幂等的：已经存在的患者和病历不会重复插入。
+如果修改或重新生成了 `synthea/output/fhir/*.json`，可以重新运行普通模式导入。导入逻辑不会重复插入同一个患者；但已有病历可能会重新加密更新，所以 `medical_records.encrypted_data` 和 `nonce` 可能变化。
+
+如果团队需要保持所有人的表内容一致，不要运行普通 Synthea 导入，改用 `-DataOnlyDumpFile` 导入统一数据快照。
 
 检查数据库中是否有患者和病历：
 
