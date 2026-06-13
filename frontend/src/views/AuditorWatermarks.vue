@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 
 import {
   listRecordWatermarks,
@@ -12,6 +12,16 @@ import { ElMessage } from "../utils/message";
 
 const loading = ref(false);
 const watermarkResult = ref<RecordWatermarkResponse | null>(null);
+const statusFilter = ref<RecordWatermark["watermark_status"] | "ALL">("ALL");
+
+const filteredRecords = computed(() => {
+  const records = watermarkResult.value?.records || [];
+  if (statusFilter.value === "ALL") {
+    return records;
+  }
+
+  return records.filter((record) => record.watermark_status === statusFilter.value);
+});
 
 function formatDateTime(value: string | null) {
   if (!value) {
@@ -40,17 +50,50 @@ function formatPatient(row: RecordWatermark) {
   return `Patient #${row.patient_id}`;
 }
 
-function formatDoctor(row: RecordWatermark) {
-  const doctorLabel = row.doctor_name || row.doctor_username;
-  if (doctorLabel && row.doctor_id !== null) {
-    return `${doctorLabel} (#${row.doctor_id})`;
+function formatSignedDoctor(row: RecordWatermark) {
+  const doctorLabel = row.signed_doctor_name || row.signed_doctor_username;
+  if (doctorLabel && row.signed_doctor_id !== null) {
+    return `${doctorLabel} (#${row.signed_doctor_id})`;
   }
 
-  if (row.doctor_id !== null) {
-    return `Doctor #${row.doctor_id}`;
+  if (row.signed_doctor_id !== null) {
+    return `Doctor #${row.signed_doctor_id}`;
   }
 
   return "-";
+}
+
+function hasTamperSignal(row: RecordWatermark) {
+  return (
+    row.signed_doctor_id !== null &&
+    row.updated_by_doctor_id !== null &&
+    row.signed_doctor_id !== row.updated_by_doctor_id
+  );
+}
+
+function formatTamperDoctor(row: RecordWatermark) {
+  if (!hasTamperSignal(row)) {
+    return "-";
+  }
+
+  const doctorLabel = row.updated_by_doctor_name || row.updated_by_doctor_username;
+  if (doctorLabel && row.updated_by_doctor_id !== null) {
+    return `${doctorLabel} (#${row.updated_by_doctor_id})`;
+  }
+
+  if (row.updated_by_doctor_id !== null) {
+    return `Doctor #${row.updated_by_doctor_id}`;
+  }
+
+  return "-";
+}
+
+function formatTamperTime(row: RecordWatermark) {
+  if (!hasTamperSignal(row)) {
+    return "-";
+  }
+
+  return formatDateTime(row.updated_at);
 }
 
 function watermarkTagType(status: RecordWatermark["watermark_status"]) {
@@ -86,6 +129,17 @@ onMounted(loadWatermarks);
       <AuditorNav />
 
       <section class="page-toolbar">
+        <el-select
+          v-model="statusFilter"
+          class="status-filter"
+          placeholder="Filter status"
+        >
+          <el-option label="All Statuses" value="ALL" />
+          <el-option label="Valid" value="VALID" />
+          <el-option label="Invalid" value="INVALID" />
+          <el-option label="Missing" value="MISSING" />
+          <el-option label="Decrypt Failed" value="DECRYPTION_FAILED" />
+        </el-select>
         <el-button type="primary" :loading="loading" @click="loadWatermarks">
           Refresh
         </el-button>
@@ -119,7 +173,7 @@ onMounted(loadWatermarks);
           <span>Watermark Verification Results</span>
         </template>
         <el-table
-          :data="watermarkResult?.records || []"
+          :data="filteredRecords"
           border
           stripe
           empty-text="No medical records yet"
@@ -130,9 +184,24 @@ onMounted(loadWatermarks);
               {{ formatPatient(row) }}
             </template>
           </el-table-column>
-          <el-table-column label="Doctor" min-width="180" show-overflow-tooltip>
+          <el-table-column label="Signed Doctor" min-width="190" show-overflow-tooltip>
             <template #default="{ row }">
-              {{ formatDoctor(row) }}
+              {{ formatSignedDoctor(row) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="Signed At" min-width="170">
+            <template #default="{ row }">
+              {{ formatDateTime(row.watermark_issued_at) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="Tamper Suspect" min-width="190" show-overflow-tooltip>
+            <template #default="{ row }">
+              {{ formatTamperDoctor(row) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="Tamper Time" min-width="170">
+            <template #default="{ row }">
+              {{ formatTamperTime(row) }}
             </template>
           </el-table-column>
           <el-table-column prop="source" label="Source" width="110" />
@@ -141,11 +210,6 @@ onMounted(loadWatermarks);
               <el-tag :type="watermarkTagType(row.watermark_status)" size="small">
                 {{ row.watermark_status }}
               </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="Signed At" min-width="170">
-            <template #default="{ row }">
-              {{ formatDateTime(row.watermark_issued_at) }}
             </template>
           </el-table-column>
           <el-table-column prop="watermark_message" label="Verification" min-width="260" show-overflow-tooltip />
@@ -166,6 +230,10 @@ onMounted(loadWatermarks);
   display: flex;
   justify-content: flex-end;
   gap: 12px;
+}
+
+.status-filter {
+  width: 180px;
 }
 
 .watermark-summary {
@@ -216,6 +284,10 @@ onMounted(loadWatermarks);
   .page-toolbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .status-filter {
+    width: 100%;
   }
 
   .watermark-summary {

@@ -78,6 +78,12 @@ export interface RecordWatermark {
   doctor_id: number | null;
   doctor_username: string | null;
   doctor_name: string | null;
+  signed_doctor_id: number | null;
+  signed_doctor_username: string | null;
+  signed_doctor_name: string | null;
+  updated_by_doctor_id: number | null;
+  updated_by_doctor_username: string | null;
+  updated_by_doctor_name: string | null;
   source: string;
   record_type: string;
   created_at: string;
