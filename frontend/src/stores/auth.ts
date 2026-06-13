@@ -54,6 +54,7 @@ export const useAuthStore = defineStore("auth", {
     async registerPatient(payload: {
       username: string;
       password: string;
+      full_name: string;
       gender: string;
       birth_date: string;
       phone: string;

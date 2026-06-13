@@ -21,11 +21,18 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)):
     username = payload.username.strip()
+    full_name = payload.full_name.strip()
 
     if not username:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username is required",
+        )
+
+    if not full_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Full name is required",
         )
 
     existing_user = db.query(User).filter(User.username == username).first()
@@ -58,7 +65,7 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
         patient = Patient(
             user_id=user.id,
             synthea_patient_id=f"SELF-{uuid4().hex}",
-            full_name=username,
+            full_name=full_name,
             gender=payload.gender,
             birth_date=payload.birth_date,
             phone=payload.phone,

@@ -12,6 +12,7 @@ export interface LoginRequest {
 export interface RegisterRequest {
   username: string;
   password: string;
+  full_name: string;
   gender: string;
   birth_date: string;
   phone: string;

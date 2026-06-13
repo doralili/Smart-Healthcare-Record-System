@@ -15,6 +15,7 @@ const mode = ref<"login" | "register">("login");
 const form = reactive({
   username: "",
   password: "",
+  full_name: "",
   gender: "",
   birth_date: "",
   phone: "",
@@ -53,6 +54,7 @@ async function submitRegister() {
   if (
     !form.username.trim() ||
     !form.password ||
+    !form.full_name.trim() ||
     !form.gender ||
     !form.birth_date ||
     !form.phone.trim() ||
@@ -68,6 +70,7 @@ async function submitRegister() {
     const user = await auth.registerPatient({
       username: form.username,
       password: form.password,
+      full_name: form.full_name,
       gender: form.gender,
       birth_date: form.birth_date,
       phone: form.phone,
@@ -126,6 +129,10 @@ function submitForm() {
         </el-form-item>
 
         <template v-if="mode === 'register'">
+          <el-form-item label="Real Name">
+            <el-input v-model="form.full_name" autocomplete="name" />
+          </el-form-item>
+
           <el-form-item label="Gender">
             <el-select v-model="form.gender" placeholder="Select gender">
               <el-option label="Female" value="female" />
