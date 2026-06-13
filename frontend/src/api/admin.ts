@@ -44,6 +44,7 @@ export interface AdminUser {
 export interface AdminDoctor {
   user_id: number;
   username: string;
+  name: string | null;
   account_status: AccountStatus;
   doctor_status: DoctorStatus;
   department: string | null;
@@ -65,12 +66,14 @@ export interface CreateUserPayload {
   username: string;
   password: string;
   role: ManagedRole;
+  name?: string;
   department?: string;
   license_no?: string;
   note?: string;
 }
 
 export interface UpdateDoctorPayload {
+  name?: string | null;
   department?: string | null;
   license_no?: string | null;
   note?: string | null;

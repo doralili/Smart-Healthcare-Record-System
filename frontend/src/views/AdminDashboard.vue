@@ -38,12 +38,14 @@ const createForm = reactive({
   username: "",
   password: "",
   role: "DOCTOR" as ManagedRole,
+  name: "",
   department: "",
   license_no: "",
   note: "",
 });
 
 const doctorForm = reactive({
+  name: "",
   department: "",
   license_no: "",
   note: "",
@@ -126,6 +128,7 @@ function openCreateDialog() {
   createForm.username = "";
   createForm.password = "";
   createForm.role = "DOCTOR";
+  createForm.name = "";
   createForm.department = "";
   createForm.license_no = "";
   createForm.note = "";
@@ -133,8 +136,8 @@ function openCreateDialog() {
 }
 
 async function submitCreateUser() {
-  if (!createForm.username.trim() || !createForm.password) {
-    ElMessage.warning("Username and password are required");
+  if (!createForm.username.trim() || !createForm.password || !createForm.name.trim()) {
+    ElMessage.warning("Username, password, and doctor name are required");
     return;
   }
 
@@ -144,6 +147,7 @@ async function submitCreateUser() {
       username: createForm.username.trim(),
       password: createForm.password,
       role: createForm.role,
+      name: createForm.role === "DOCTOR" ? createForm.name.trim() : undefined,
       department: createForm.role === "DOCTOR" ? createForm.department : undefined,
       license_no: createForm.role === "DOCTOR" ? createForm.license_no : undefined,
       note: createForm.role === "DOCTOR" ? createForm.note : undefined,
@@ -196,6 +200,7 @@ async function resetPassword(user: AdminUser) {
 
 function openDoctorDialog(doctor: AdminDoctor) {
   selectedDoctor.value = doctor;
+  doctorForm.name = doctor.name || "";
   doctorForm.department = doctor.department || "";
   doctorForm.license_no = doctor.license_no || "";
   doctorForm.note = doctor.note || "";
@@ -212,6 +217,7 @@ async function submitDoctorUpdate() {
   saving.value = true;
   try {
     await updateAdminDoctor(selectedDoctor.value.user_id, {
+      name: doctorForm.name.trim(),
       department: doctorForm.department,
       license_no: doctorForm.license_no,
       note: doctorForm.note,
@@ -375,6 +381,7 @@ onMounted(loadAdminData);
             <el-table :data="doctors" border stripe empty-text="No doctors">
               <el-table-column prop="user_id" label="User ID" width="90" />
               <el-table-column prop="username" label="Username" min-width="150" />
+              <el-table-column prop="name" label="Doctor Name" min-width="160" />
               <el-table-column label="Review" width="120">
                 <template #default="{ row }">
                   <el-tag :type="statusTag(row.doctor_status)" size="small">
@@ -412,7 +419,7 @@ onMounted(loadAdminData);
                     <el-option
                       v-for="doctor in approvedDoctors"
                       :key="doctor.user_id"
-                      :label="`${doctor.username} · ${doctor.department || 'No department'}`"
+                      :label="`${doctor.name || doctor.username} · ${doctor.department || 'No department'}`"
                       :value="doctor.user_id"
                     />
                   </el-select>
@@ -482,6 +489,14 @@ onMounted(loadAdminData);
             />
           </el-form-item>
           <template v-if="createForm.role === 'DOCTOR'">
+            <el-form-item label="Doctor Name">
+              <el-input
+                v-model="createForm.name"
+                maxlength="100"
+                autocomplete="name"
+                @keyup.enter="submitCreateUser"
+              />
+            </el-form-item>
             <el-form-item label="Department">
               <el-select v-model="createForm.department" filterable placeholder="Select department">
                 <el-option
@@ -512,6 +527,14 @@ onMounted(loadAdminData);
 
       <el-dialog v-model="doctorDialogOpen" title="Doctor Review" width="560px">
         <el-form label-position="top" @submit.prevent="submitDoctorUpdate">
+          <el-form-item label="Doctor Name">
+            <el-input
+              v-model="doctorForm.name"
+              maxlength="100"
+              autocomplete="name"
+              @keyup.enter="submitDoctorUpdate"
+            />
+          </el-form-item>
           <el-form-item label="Department">
             <el-select v-model="doctorForm.department" filterable placeholder="Select department">
               <el-option

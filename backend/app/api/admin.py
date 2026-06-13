@@ -30,6 +30,7 @@ class CreateUserRequest(BaseModel):
     username: str = Field(min_length=1, max_length=50)
     password: str = Field(min_length=1, max_length=72)
     role: ManagedRole
+    name: str | None = Field(default=None, max_length=100)
     department: str | None = None
     license_no: str | None = None
     note: str | None = None
@@ -44,6 +45,7 @@ class ResetPasswordRequest(BaseModel):
 
 
 class UpdateDoctorRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=100)
     department: str | None = None
     license_no: str | None = None
     note: str | None = None
@@ -144,6 +146,10 @@ def create_managed_user(
     if not username:
         raise HTTPException(status_code=400, detail="Username is required")
 
+    doctor_name = payload.name.strip() if payload.name is not None else ""
+    if payload.role == "DOCTOR" and not doctor_name:
+        raise HTTPException(status_code=400, detail="Doctor name is required")
+
     if db.query(User).filter(User.username == username).first():
         raise HTTPException(status_code=409, detail="Username already exists")
 
@@ -161,7 +167,7 @@ def create_managed_user(
         db.add(
             Doctor(
                 user_id=user.id,
-                name=username,
+                name=doctor_name,
                 department=payload.department,
                 license_no=payload.license_no,
                 note=payload.note,
@@ -264,6 +270,9 @@ def list_doctors(
             {
                 "user_id": user.id,
                 "username": user.username,
+                "name": doctor_profiles.get(user.id).name
+                if doctor_profiles.get(user.id)
+                else None,
                 "account_status": user.status,
                 "doctor_status": _doctor_status(user, doctor_profiles.get(user.id)),
                 "department": doctor_profiles.get(user.id).department
@@ -302,6 +311,11 @@ def update_doctor(
         doctor = Doctor(user_id=user.id, name=user.username, verified=False)
         db.add(doctor)
 
+    if payload.name is not None:
+        doctor_name = payload.name.strip()
+        if not doctor_name:
+            raise HTTPException(status_code=400, detail="Doctor name is required")
+        doctor.name = doctor_name
     if payload.department is not None:
         doctor.department = payload.department
     if payload.license_no is not None:
@@ -328,6 +342,8 @@ def update_doctor(
 
     return {
         "user_id": user.id,
+        "username": user.username,
+        "name": doctor.name,
         "doctor_status": _doctor_status(user, doctor),
         "account_status": user.status,
         "verified": doctor.verified,
