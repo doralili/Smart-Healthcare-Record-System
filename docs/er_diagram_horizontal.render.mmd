@@ -1,0 +1,111 @@
+%%{init: {
+  "theme": "base",
+  "themeVariables": {
+    "primaryColor": "#F8FAFC",
+    "primaryTextColor": "#111827",
+    "primaryBorderColor": "#1F4E79",
+    "lineColor": "#374151",
+    "secondaryColor": "#EAF2FF",
+    "tertiaryColor": "#FFF7E6",
+    "fontFamily": "Microsoft YaHei, SimSun, Arial",
+    "fontSize": "15px"
+  },
+  "themeCSS": ".edgeLabel, .labelBkg { background-color: #FFF7E6 !important; color: #7A2E0E !important; font-weight: 700 !important; } .er.relationshipLabel { fill: #7A2E0E !important; font-weight: 700 !important; }"
+}}%%
+
+erDiagram
+    direction LR
+
+    USERS ||--o{ DOCTORS : "account-doctor"
+    USERS ||--o| PATIENTS : "account-patient"
+    DOCTORS ||--o{ CONSENTS : "applay for authorization"
+    PATIENTS ||--o{ CONSENTS : "grant authorization"
+    CONSENTS ||--o{ ACCESS_LOGS : "access basis"
+    PATIENTS ||--o{ ACCESS_LOGS : "be visited"
+    PATIENTS ||--o{ MEDICAL_RECORDS : "own case"
+
+    USERS {
+        int id PK
+        varchar username
+        varchar password_hash
+        varchar role
+        varchar status
+        timestamptz created_at
+        timestamptz last_login_at
+    }
+
+    AUDIT_LOGS {
+        int id PK
+        int actor_user_id
+        varchar actor_role
+        varchar actor_username
+        varchar action
+        varchar target_type
+        int target_id
+        int doctor_id
+        int patient_id
+        int consent_id
+        varchar outcome
+        text detail
+        timestamptz created_at
+        varchar previous_hash
+        varchar current_hash
+    }
+
+    DOCTORS {
+        int id PK
+        int user_id FK
+        varchar name
+        varchar department
+        varchar license_no
+        boolean verified
+        timestamptz created_at
+    }
+
+    CONSENTS {
+        int id PK
+        int patient_id FK
+        int doctor_id FK
+        varchar record_scope
+        varchar permission
+        varchar status
+        text request_reason
+        text approve_note
+        timestamptz start_time
+        timestamptz end_time
+        timestamptz created_at
+    }
+
+    ACCESS_LOGS {
+        int id PK
+        int doctor_id FK
+        int patient_id FK
+        int consent_id FK
+        varchar action
+        varchar record_scope
+        timestamptz created_at
+    }
+
+    PATIENTS {
+        int id PK
+        int user_id FK
+        varchar synthea_patient_id
+        varchar full_name
+        varchar gender
+        date birth_date
+        varchar phone
+        text address
+        timestamptz created_at
+    }
+
+    MEDICAL_RECORDS {
+        int id PK
+        int patient_id FK
+        varchar source
+        varchar record_type
+        text encrypted_data
+        varchar nonce
+        timestamptz created_at
+        timestamptz updated_at
+        int updated_by_doctor_id FK
+    }
