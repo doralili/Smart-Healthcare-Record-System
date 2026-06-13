@@ -16,6 +16,7 @@
 erDiagram
     direction LR
 
+    AUDIT_LOGS }o..|| USERS : "audit trail"
     USERS ||--o{ DOCTORS : "account-doctor"
     USERS ||--o| PATIENTS : "account-patient"
     DOCTORS ||--o{ CONSENTS : "applay for authorization"
@@ -23,16 +24,6 @@ erDiagram
     CONSENTS ||--o{ ACCESS_LOGS : "access basis"
     PATIENTS ||--o{ ACCESS_LOGS : "be visited"
     PATIENTS ||--o{ MEDICAL_RECORDS : "own case"
-
-    USERS {
-        int id PK
-        varchar username
-        varchar password_hash
-        varchar role
-        varchar status
-        timestamptz created_at
-        timestamptz last_login_at
-    }
 
     AUDIT_LOGS {
         int id PK
@@ -50,6 +41,16 @@ erDiagram
         timestamptz created_at
         varchar previous_hash
         varchar current_hash
+    }
+
+    USERS {
+        int id PK
+        varchar username
+        varchar password_hash
+        varchar role
+        varchar status
+        timestamptz created_at
+        timestamptz last_login_at
     }
 
     DOCTORS {
