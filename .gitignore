@@ -27,5 +27,5 @@ Thumbs.db
 **/.env
 *.log
 
-#database
-database/health_security_data_sync.sql
+#docs
+docs/论文内容修改建议.md
