@@ -14,13 +14,13 @@ from app.schemas.doctor import AccessRequestCreate
 from app.services.masking import mask_record_by_scope
 from app.services.clinical_records import filter_related_clinical_records, normalize_clinical_record_links
 from app.services.audit_service import request_audit_context, write_audit_log
-from app.services.crypto_service import MedicalRecordCryptoError, encrypt_record_json
+from app.services.crypto_service import encrypt_record_json
 from app.services.record_watermark import embed_record_watermark
 
 router = APIRouter(prefix="/api/doctor", tags=["医生业务模块"])
 
 
-class MedicalRecordUpdateRequest(BaseModel):
+class MedicalRecordCreateRequest(BaseModel):
     record: dict[str, Any]
 
 
@@ -700,97 +700,6 @@ def get_patient_mask_record(
     
     return {"medical_record": result}
 
-@router.put("/patients/{patient_id}/records/{record_id}")
-def update_patient_record(
-    patient_id: int,
-    record_id: int,
-    payload: MedicalRecordUpdateRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    _=Depends(require_roles("DOCTOR")),
-):
-    ensure_doctor_approved(db, current_user)
-
-    patient = db.query(Patient).filter(Patient.id == patient_id).first()
-    if patient is None:
-        raise HTTPException(status_code=404, detail="Patient not found")
-
-    record = db.query(MedicalRecord).filter(
-        MedicalRecord.id == record_id,
-        MedicalRecord.patient_id == patient_id,
-    ).first()
-    if record is None:
-        raise HTTPException(status_code=404, detail="Medical record not found")
-
-    valid_consent = get_valid_consent(
-        db,
-        patient_id=patient_id,
-        doctor_user_id=current_user.id,
-        required_scope="EXTRA",
-    )
-    if valid_consent is None:
-        write_audit_log(
-            db,
-            action="DOCTOR_RECORD_EDIT_DENIED",
-            actor=current_user,
-            target_type="medical_record",
-            target_id=record_id,
-            doctor_id=current_user.id,
-            patient_id=patient_id,
-            outcome="DENIED",
-            detail="Doctor record overwrite denied: no active EXTRA consent",
-            **request_audit_context(request),
-        )
-        db.commit()
-        raise HTTPException(
-            status_code=403,
-            detail="Full access permission is required to edit this medical record",
-        )
-
-    write_audit_log(
-        db,
-        action="DOCTOR_RECORD_EDIT_AUTHORIZED",
-        actor=current_user,
-        target_type="medical_record",
-        target_id=record.id,
-        doctor_id=current_user.id,
-        patient_id=patient_id,
-        consent_id=valid_consent.id,
-        record_scope=valid_consent.record_scope,
-        outcome="SUCCESS",
-        detail="Doctor permission checked before record overwrite",
-        **request_audit_context(request),
-    )
-
-    updated_at = now_beijing()
-    record_data = embed_record_watermark(
-        normalize_clinical_record_links(payload.record),
-        patient_id=patient_id,
-        doctor_id=current_user.id,
-        issued_at=updated_at.isoformat(),
-    )
-
-    try:
-        encrypted_data, nonce = encrypt_record_json(record_data)
-    except MedicalRecordCryptoError as exc:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to encrypt medical record") from exc
-
-    record.encrypted_data = encrypted_data
-    record.nonce = nonce
-    record.updated_at = updated_at
-    record.updated_by_doctor_id = current_user.id
-    db.commit()
-
-    return {
-        "record_id": record.id,
-        "patient_id": patient_id,
-        "updated_at": record.updated_at,
-        "updated_by_doctor_id": record.updated_by_doctor_id,
-    }
-
-
 @router.get("/search-patients")
 def search_patients(
     q: str = "",
@@ -838,7 +747,7 @@ def search_patients(
 @router.post("/patients/{patient_id}/records")
 def add_patient_record(
     patient_id: int,
-    payload: MedicalRecordUpdateRequest,
+    payload: MedicalRecordCreateRequest,
     request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -869,7 +778,6 @@ def add_patient_record(
         raise HTTPException(status_code=403, detail="No access permission")
     
     from app.models.medical_record import MedicalRecord
-    from app.services.crypto_service import encrypt_record_json
     
     # 验证患者存在
     patient = db.query(Patient).filter(Patient.id == patient_id).first()

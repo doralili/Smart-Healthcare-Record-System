@@ -42,11 +42,6 @@ export function getPatientRecord(patientId: number) {
   return api.get(`/api/doctor/patients/${patientId}/records`)
 }
 
-// 更新病历记录（覆盖已有记录）
-export function updatePatientRecord(patientId: number, recordId: number, record: any) {
-  return api.put(`/api/doctor/patients/${patientId}/records/${recordId}`, { record })
-}
-
 // 新增病历记录（追加新记录）
 export function addPatientRecord(patientId: number, record: any) {
   return api.post(`/api/doctor/patients/${patientId}/records`, { record })
