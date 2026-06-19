@@ -39,16 +39,16 @@ export const useAuthStore = defineStore("auth", {
 
   actions: {
     async login(username: string, password: string) {
-      const res = await login({ username, password });
+      const data = await login({ username, password });
 
-      this.token = res.data.access_token;
-      this.user = res.data.user;
+      this.token = data.access_token;
+      this.user = data.user;
 
       localStorage.setItem("token", this.token);
       localStorage.setItem("user", JSON.stringify(this.user));
       this.sessionVerified = true;
 
-      return res.data.user;
+      return data.user;
     },
 
     async registerPatient(payload: {
@@ -60,8 +60,7 @@ export const useAuthStore = defineStore("auth", {
       phone: string;
       address: string;
     }) {
-      const res = await register(payload);
-      return res.data;
+      return register(payload);
     },
 
     logout() {
@@ -84,8 +83,7 @@ export const useAuthStore = defineStore("auth", {
       }
 
       try {
-        const res = await getMe(this.token);
-        this.user = res.data;
+        this.user = await getMe();
         this.sessionVerified = true;
         localStorage.setItem("user", JSON.stringify(this.user));
         return true;

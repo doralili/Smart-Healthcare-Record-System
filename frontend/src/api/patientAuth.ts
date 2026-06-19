@@ -1,21 +1,4 @@
-import axios from 'axios'
-
-const api = axios.create({
-  baseURL: 'http://127.0.0.1:8000'
-})
-
-api.interceptors.request.use(config => {
-  const token = localStorage.getItem('token')
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
-  }
-  return config
-})
-
-api.interceptors.response.use(
-  response => response.data,
-  error => Promise.reject(error)
-)
+import { api } from './client'
 
 export interface PendingConsent {
   consent_id: number
@@ -60,42 +43,42 @@ export interface AvailableDoctorsResponse {
   doctors: AvailableDoctor[]
 }
 
-// 获取待审批申请
+// 鑾峰彇寰呭鎵圭敵璇?
 export function getPendingConsents(token: string) {
   return api.get<unknown, PendingConsentResponse>('/api/patient/me/records/pending-consents', {
     headers: { Authorization: `Bearer ${token}` }
   })
 }
 
-// 批准申请
+// 鎵瑰噯鐢宠
 export function approveConsent(token: string, consentId: number) {
   return api.post(`/api/patient/me/records/consents/${consentId}/approve`, {}, {
     headers: { Authorization: `Bearer ${token}` }
   })
 }
 
-// 拒绝申请
+// 鎷掔粷鐢宠
 export function rejectConsent(token: string, consentId: number) {
   return api.post(`/api/patient/me/records/consents/${consentId}/reject`, {}, {
     headers: { Authorization: `Bearer ${token}` }
   })
 }
 
-// 获取已授权医生列表
+// 鑾峰彇宸叉巿鏉冨尰鐢熷垪琛?
 export function getMyDoctors(token: string) {
   return api.get<unknown, AuthorizedDoctorResponse>('/api/patient/me/records/my-doctors', {
     headers: { Authorization: `Bearer ${token}` }
   })
 }
 
-// 撤销授权
+// 鎾ら攢鎺堟潈
 export function revokeConsent(token: string, consentId: number) {
   return api.post(`/api/patient/me/records/consents/${consentId}/revoke`, {}, {
     headers: { Authorization: `Bearer ${token}` }
   })
 }
 
-// 获取可选医生，支持按科室过滤
+// 鑾峰彇鍙€夊尰鐢燂紝鏀寔鎸夌瀹よ繃婊?
 export function getAvailableDoctors(token: string, department = '') {
   return api.get<unknown, AvailableDoctorsResponse>('/api/patient/me/records/available-doctors', {
     params: department.trim() ? { department: department.trim() } : undefined,
@@ -103,7 +86,7 @@ export function getAvailableDoctors(token: string, department = '') {
   })
 }
 
-// 鎮ｈ€呴€夋嫨榛樿鍖荤敓
+// 閹綀鈧懘鈧瀚ㄦ妯款吇閸栬崵鏁?
 export function selectDefaultDoctor(token: string, doctorUserId: number) {
   return api.post('/api/patient/me/records/default-doctors', {
     doctor_user_id: doctorUserId

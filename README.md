@@ -6,7 +6,7 @@
 
 - 患者病历以结构化 JSON 保存，入库前使用 AES-GCM 加密。
 - 医生必须拥有有效授权才能查看或写入患者病历。
-- 默认授权只返回必要范围内的脱敏病历；Full Access 可查看完整范围。
+- DEFAULT 授权只返回必要范围内的脱敏病历；EXTRA / Full Access 返回完整范围。
 - 患者可以查看、批准、拒绝、撤销医生授权。
 - 管理员只负责账号、医生审核、医患分配和系统统计，不能查看解密病历正文。
 - 审计员可以查看审计日志、验证日志哈希链、检查病历隐藏水印。
@@ -15,20 +15,21 @@
 
 | 模块 | 技术 |
 |---|---|
-| 前端 | Vue 3, Vite, Element Plus, Pinia, Vue Router |
-| 后端 | FastAPI, SQLAlchemy, Pydantic |
-| 数据库 | openGauss / PostgreSQL compatible driver |
+| 前端 | Vue 3, TypeScript, Vite, Element Plus, Pinia, Vue Router |
+| 前端 API | Axios 统一实例与请求拦截器 |
+| 后端 | FastAPI, SQLAlchemy, Pydantic, Uvicorn |
+| 数据库 | openGauss / PostgreSQL compatible driver, psycopg2 |
 | 认证 | JWT, bcrypt |
-| 病历安全 | AES-GCM 加密, 字段脱敏, 隐藏水印 |
+| 病历安全 | AES-GCM 加密, 字段脱敏, HMAC-SHA256 隐藏水印 |
 | 审计 | SHA-256 哈希链 |
-| 数据来源 | Synthea 合成医疗数据 & 手动写入 |
+| 数据来源 | Synthea 合成医疗数据 & 医生手动写入 |
 
 ## 角色功能
 
 ### Patient
 
-- 登录后查看本人病历、诊断、就诊、检查、用药和操作记录。
-- 查看可选择的医生，并为医生授予默认访问权限。
+- 登录后查看本人合并病历、诊断、就诊、检查、用药和操作记录。
+- 查看可选择的医生，并为医生授予 DEFAULT 访问权限。
 - 查看医生提交的授权申请。
 - 批准、拒绝或撤销医生访问权限。
 
@@ -38,7 +39,6 @@
 - 搜索患者并提交 Default Access 或 Full Access 申请。
 - 在有效授权下查看按权限处理后的患者病历。
 - 在有效授权下新增医生病历。
-- 在 Full Access 下覆盖修改已有病历。
 - 当前不支持删除整份病历。
 
 ### Admin
@@ -47,7 +47,7 @@
 - 创建医生账号。
 - 启用、禁用账号，重置密码。
 - 审核医生，维护科室、执照号和备注。
-- 将患者分配给已审核医生，并生成 14 天默认授权。
+- 将患者分配给已审核医生，并生成 14 天 DEFAULT 授权。
 
 ### Auditor
 
@@ -83,18 +83,37 @@ Smart-Healthcare-Record-System/
 │  │  ├─ db/                        数据库连接和启动初始化
 │  │  ├─ models/                    SQLAlchemy 数据表模型
 │  │  ├─ schemas/                   Pydantic 请求/响应结构
-│  │  └─ services/                  加密、脱敏、审计、水印、临床记录处理
-│  ├─ scripts/                      Synthea FHIR 数据导入脚本
-│  └─ requirements.txt              后端依赖
+│  │  └─ services/                  业务服务与安全能力
+│  │     ├─ audit_service.py        审计日志与哈希链
+│  │     ├─ clinical_records.py     临床记录归一化、关联和科室分类
+│  │     ├─ consent_access.py       授权状态与优先级
+│  │     ├─ crypto_service.py       病历 AES-GCM 加解密
+│  │     ├─ doctor_display.py       医生名称与科室显示辅助
+│  │     ├─ record_presentation.py  病历展示、脱敏、去重、DEFAULT/EXTRA 组装
+│  │     └─ record_watermark.py     隐藏水印嵌入与验证
+│  ├─ scripts/
+│  │  └─ import_synthea_records.py  Synthea FHIR 数据导入脚本
+│  ├─ .env.example                  后端环境变量模板
+│  ├─ requirements.txt              后端依赖
+│  └─ run_dev.ps1                   后端本地启动脚本
 │
 ├─ frontend/                        前端 Vue 应用
 │  ├─ src/
 │  │  ├─ api/                       后端 API 封装
+│  │  │  ├─ client.ts               统一 Axios 实例
+│  │  │  ├─ auth.ts                 登录、注册、当前用户
+│  │  │  ├─ patientRecords.ts       患者病历接口
+│  │  │  ├─ patientAuth.ts          患者授权接口
+│  │  │  ├─ doctor.ts               医生业务接口
+│  │  │  ├─ admin.ts                管理员接口
+│  │  │  └─ auditor.ts              审计员接口
+│  │  ├─ components/                公共组件
 │  │  ├─ layouts/                   Dashboard 通用布局
 │  │  ├─ router/                    路由与角色守卫
 │  │  ├─ stores/                    Pinia 登录状态
 │  │  └─ views/                     登录页、患者/医生/管理员/审计员页面
-│  └─ package.json                  前端依赖和脚本
+│  ├─ package.json                  前端依赖和脚本
+│  └─ run_dev.ps1                   前端本地启动脚本
 │
 ├─ database/                        数据库脚本和演示数据准备
 │  ├─ schema.sql                    表结构
@@ -104,11 +123,10 @@ Smart-Healthcare-Record-System/
 │  └─ setup_demo_database.ps1       一键准备 openGauss 和演示数据
 │
 ├─ synthea/                         合成医疗数据
-│  ├─ output/fhir/                  示例 FHIR JSON
-│  └─ output/csv/                   示例 CSV
+│  ├─ synthea-with-dependencies.jar Synthea 生成工具
+│  └─ output/                       示例 FHIR JSON / CSV 输出
 │
-├─ docs/                            项目设计和接口边界文档
-├─ 测试手册.md                       演示与测试步骤
+├─ docs/                            项目设计文档和 ER 图
 └─ README.md                        项目说明
 ```
 
@@ -116,7 +134,13 @@ Smart-Healthcare-Record-System/
 
 ### 1. 配置后端环境变量
 
-复制并编辑 `backend/.env`。核心配置如下：
+将 `backend/.env.example` 的内容复制到 `backend/.env` 中，然后按本机环境修改配置。
+
+```powershell
+Copy-Item .\backend\.env.example .\backend\.env
+```
+
+核心配置如下：
 
 ```env
 DATABASE_URL=postgresql+psycopg2://healthcare:Healthcare%40123@127.0.0.1:5433/health_security
@@ -143,6 +167,8 @@ TZ=Asia/Shanghai
   -HostPort 5433 `
   -DataOnlyDumpFile .\database\health_security_data_sync.sql
 ```
+
+使用数据快照时，只要快照中的病历是用当前 `MEDICAL_RECORD_KEY` 加密的，旧病例展示、科室分类、DEFAULT/EXTRA 授权展示仍然可用。
 
 ### 3. 启动后端
 
@@ -192,7 +218,7 @@ password123
 | `patient1` - `patient10` | PATIENT | `/patient` | 查看本人病历和管理医生授权 |
 | `doctor1` - `doctor8` | DOCTOR | `/doctor` | 查看患者、申请授权、新增病历 |
 | `admin` | ADMIN | `/admin` | 管理账号、审核医生、分配医患关系 |
-| `auditor` | AUDITOR | `/auditor` | 查看审计日志和验证哈希链 |
+| `auditor` | AUDITOR | `/auditor` | 查看审计日志、验证哈希链和检查水印 |
 
 ## 关键安全边界
 
@@ -202,28 +228,34 @@ password123
 - 患者只能访问与自己账号绑定的病历。
 - 管理员不能解密查看病历正文。
 - 审计日志使用哈希链记录关键行为，便于发现日志篡改。
-- 医生新增或修改病历时会嵌入隐藏水印，用于后续追踪来源和辅助校验完整性。
+- 医生新增病历时会嵌入隐藏水印，用于后续追踪来源和辅助校验完整性。
 
 ## 常用接口
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `POST` | `/api/auth/login` | 登录 |
-| `POST` | `/api/auth/register-patient` | 患者注册 |
+| `POST` | `/api/auth/register` | 患者注册 |
+| `GET` | `/api/auth/me` | 当前用户 |
 | `GET` | `/api/patient/me/records/combined` | 患者查看合并病历 |
 | `GET` | `/api/patient/me/records/pending-consents` | 患者查看待审批授权 |
+| `GET` | `/api/patient/me/records/available-doctors` | 患者查看可选择医生 |
+| `POST` | `/api/patient/me/records/default-doctors` | 患者选择默认医生 |
 | `POST` | `/api/patient/me/records/consents/{id}/approve` | 患者批准授权 |
+| `POST` | `/api/patient/me/records/consents/{id}/reject` | 患者拒绝授权 |
 | `POST` | `/api/patient/me/records/consents/{id}/revoke` | 患者撤销授权 |
+| `GET` | `/api/doctor/me` | 医生资料 |
 | `GET` | `/api/doctor/my-patients` | 医生查看患者列表 |
+| `GET` | `/api/doctor/search-patients` | 医生搜索患者 |
 | `POST` | `/api/doctor/access-requests` | 医生提交授权申请 |
 | `GET` | `/api/doctor/patients/{patient_id}/records` | 医生查看授权病历 |
 | `POST` | `/api/doctor/patients/{patient_id}/records` | 医生新增病历 |
 | `GET` | `/api/admin/overview` | 管理员系统概览 |
+| `GET` | `/api/admin/users` | 管理员查看用户 |
+| `GET` | `/api/admin/doctors` | 管理员查看医生 |
+| `GET` | `/api/admin/patients` | 管理员查看患者 |
+| `POST` | `/api/admin/assignments` | 管理员分配医生患者关系 |
+| `GET` | `/api/auditor/summary` | 审计员统计 |
+| `GET` | `/api/auditor/audit-logs` | 审计员查看审计日志 |
 | `GET` | `/api/auditor/verify-hash-chain` | 审计员验证日志哈希链 |
 | `GET` | `/api/auditor/record-watermarks` | 审计员查看病历水印状态 |
-
-## 参考文档
-
-- [项目设计文档](docs/PROJECT_DESIGN.md)
-- [中文计划文档](docs/GROUP_PROJECT_PLAN_CN.md)
-- [接口边界文档](docs/API_BOUNDARY.md)

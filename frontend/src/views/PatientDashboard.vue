@@ -763,8 +763,7 @@ async function loadRecords() {
   loading.value = true;
 
   try {
-    const res = await getMyCombinedRecord(auth.token);
-    selectedRecord.value = res.data;
+    selectedRecord.value = await getMyCombinedRecord();
   } catch {
     ElMessage.error("Failed to load your medical record.");
   } finally {
@@ -782,7 +781,6 @@ async function loadPendingConsents(silent = false) {
     const res = await getPendingConsents(auth.token);
     // 修复：res 已经是 response.data，直接取 pending_consents
     pendingConsents.value = res.pending_consents || [];
-    console.log('Pending consents loaded:', pendingConsents.value);
   } catch (err) {
     console.error('Failed to load pending requests:', err);
     if (!silent) {
@@ -803,7 +801,6 @@ async function loadMyDoctors() {
     const res = await getMyDoctors(auth.token);
     // 修复：res 已经是 response.data，直接取 doctors
     authorizedDoctors.value = res.doctors || [];
-    console.log('Authorized doctors loaded:', authorizedDoctors.value);
   } catch (err) {
     console.error('Failed to load authorized doctors:', err);
     ElMessage.error("Failed to load authorized doctors");

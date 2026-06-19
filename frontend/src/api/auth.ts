@@ -1,8 +1,4 @@
-import axios from "axios";
-
-export const api = axios.create({
-  baseURL: "http://127.0.0.1:8000",
-});
+import { api } from "./client";
 
 export interface LoginRequest {
   username: string;
@@ -33,17 +29,13 @@ export interface LoginResponse {
 }
 
 export function login(data: LoginRequest) {
-  return api.post<LoginResponse>("/api/auth/login", data);
+  return api.post<unknown, LoginResponse>("/api/auth/login", data);
 }
 
 export function register(data: RegisterRequest) {
-  return api.post<UserInfo>("/api/auth/register", data);
+  return api.post<unknown, UserInfo>("/api/auth/register", data);
 }
 
-export function getMe(token: string) {
-  return api.get<UserInfo>("/api/auth/me", {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
+export function getMe() {
+  return api.get<unknown, UserInfo>("/api/auth/me");
 }

@@ -1,4 +1,4 @@
-import { api } from "./auth";
+import { api } from "./client";
 
 export interface PatientRecordSummary {
   id: number;
@@ -35,26 +35,14 @@ export interface PatientRecordDetail extends PatientRecordSummary {
   record: MedicalRecordPayload;
 }
 
-function authHeaders(token: string) {
-  return {
-    Authorization: `Bearer ${token}`,
-  };
+export function listMyRecords() {
+  return api.get<unknown, PatientRecordSummary[]>("/api/patient/me/records");
 }
 
-export function listMyRecords(token: string) {
-  return api.get<PatientRecordSummary[]>("/api/patient/me/records", {
-    headers: authHeaders(token),
-  });
+export function getMyRecordDetail(recordId: number) {
+  return api.get<unknown, PatientRecordDetail>(`/api/patient/me/records/${recordId}`);
 }
 
-export function getMyRecordDetail(token: string, recordId: number) {
-  return api.get<PatientRecordDetail>(`/api/patient/me/records/${recordId}`, {
-    headers: authHeaders(token),
-  });
-}
-
-export function getMyCombinedRecord(token: string) {
-  return api.get<PatientRecordDetail>("/api/patient/me/records/combined", {
-    headers: authHeaders(token),
-  });
+export function getMyCombinedRecord() {
+  return api.get<unknown, PatientRecordDetail>("/api/patient/me/records/combined");
 }

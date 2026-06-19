@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import DashboardLayout from "../layouts/DashboardLayout.vue"
-import { getMyPatients, getDoctorProfile, submitAccessRequest, getPatientRecord, addPatientRecord } from '../api/doctor'
+import { getMyPatients, getDoctorProfile, submitAccessRequest, getPatientRecord, addPatientRecord, searchPatients as searchPatientsApi } from '../api/doctor'
 import { ElMessage } from '../utils/message'
 
 const activeTab = ref('patients')
@@ -446,12 +446,7 @@ const searchPatients = async () => {
   }
   
   try {
-    const res = await fetch(`http://localhost:8000/api/doctor/search-patients?q=${searchKeyword.value}`, {
-      headers: {
-        'Authorization': `Bearer ${localStorage.getItem('token')}`
-      }
-    })
-    const data = await res.json()
+    const data = await searchPatientsApi(searchKeyword.value)
     searchResults.value = data.patients || []
   } catch (err) {
     console.error('Search failed:', err)
